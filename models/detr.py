@@ -21,7 +21,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_roles=190, num_verbs=1, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_roles=190, num_verbs=504, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -37,10 +37,9 @@ class DETR(nn.Module):
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
-        # self.num_verbs meanins # of embedding number for verb input for decoder
-        self.verb_classification = nn.Linear(hidden_dim, 504)
+        self.verb_classification = nn.Linear(hidden_dim, 1)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.query_embed = nn.Embedding(self.num_verbs + self.num_roles, hidden_dim)  # 0 for verb, 1~191 for role
+        self.query_embed = nn.Embedding(self.num_verbs + self.num_roles, hidden_dim)  # 0~503 for verb, 504~693 for role
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -320,11 +319,11 @@ class SWiGCriterion(nn.Module):
         for b, t in enumerate(targets):
             role_noun_loss = []
             for n in range(3):
-                role_noun_loss.append(self.loss_function(
-                    role_noun_pred_logits[b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
+                role_noun_loss.append(
+                    self.loss_function(role_noun_pred_logits[b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
             batch_noun_loss.append(sum(role_noun_loss) / 3)
-            batch_noun_acc += accuracy_swig(role_noun_pred_logits[b,
-                                            t['roles']], t['labels'][:len(t['roles'])].long().cuda())
+            batch_noun_acc += accuracy_swig(
+                role_noun_pred_logits[b, t['roles']], t['labels'][:len(t['roles'])].long().cuda())
 
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
@@ -333,7 +332,8 @@ class SWiGCriterion(nn.Module):
         verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
 
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_error': verb_acc, 'noun_error': noun_acc, 'class_error': torch.tensor(0).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc,
+                'class_error': torch.tensor(0).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
 
 
 class PostProcess(nn.Module):
