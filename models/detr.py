@@ -21,7 +21,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_roles=190, num_verbs=504, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_verbs=1, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -35,7 +35,7 @@ class DETR(nn.Module):
         self.num_verbs = num_verbs
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.verb_classification = nn.Linear(hidden_dim, 1)
+        self.verb_classification = nn.Linear(hidden_dim, 504)
         self.query_embed = nn.Embedding(self.num_verbs, hidden_dim)  # 0~503 for verb, 504~693 for role
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
@@ -300,7 +300,7 @@ class SWiGCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         # assert 'pred_logits' in outputs
-        verb_pred_logits = outputs['pred_verb'].squeeze(2)
+        verb_pred_logits = outputs['pred_verb'].squeeze(1)
 
         gt_verbs = torch.stack([t['verbs'] for t in targets])
         verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
