@@ -28,7 +28,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 class CSVDataset(Dataset):
     """CSV dataset."""
 
-    def __init__(self, img_folder, train_file, class_list, verb_path, role_path, verb_info, is_training, inference=False, inference_verbs=None, transform=None, is_visualizing=False):
+    def __init__(self, img_folder, train_file, class_list, verb_path, role_path, frame_path, verb_info, is_training, inference=False, inference_verbs=None, transform=None, is_visualizing=False):
         """
         Args:
             train_file (string): CSV file with training annotations
@@ -42,12 +42,15 @@ class CSVDataset(Dataset):
         self.class_list = class_list
         self.verb_path = verb_path
         self.role_path = role_path
+        self.frame_path = frame_path
         self.verb_info = verb_info
         self.transform = transform
         self.is_visualizing = is_visualizing
         self.is_training = is_training
 
-        self.color_change = transforms.Compose([transforms.ColorJitter(hue=.05, saturation=.05, brightness=0.05), transforms.RandomGrayscale(p=0.3)])
+        self.color_change = transforms.Compose([
+            transforms.ColorJitter(hue=.05, saturation=.05, brightness=0.05),
+            transforms.RandomGrayscale(p=0.3)])
 
         with open(self.class_list, 'r') as file:
             self.classes, self.idx_to_class = self.load_classes(csv.reader(file, delimiter=','))
@@ -71,13 +74,14 @@ class CSVDataset(Dataset):
             self.verb_to_idx, self.idx_to_verb = self.load_verb(f)
         with open(self.role_path, 'r') as f:
             self.role_to_idx, self.idx_to_role = self.load_role(f)
+        with open(self.frame_path, 'r') as f:
+            self.frame_to_idx, self.idx_to_frame = self.load_frame(f)
 
         self.image_to_image_idx = {}
         i = 0
         for image_name in self.image_names:
             self.image_to_image_idx[image_name] = i
             i += 1
-
 
     def load_classes(self, csv_reader):
         result = {}
@@ -117,9 +121,20 @@ class CSVDataset(Dataset):
             k += 1
         return role_to_idx, idx_to_role
 
+    def load_frame(self, file):
+        frame_to_idx = {}
+        idx_to_frame = []
+
+        k = 0
+        for line in file:
+            frame = eval(line.split('\n')[0])
+            idx_to_frame.append(frame)
+            frame_to_idx[frame] = k
+            k += 1
+        return frame_to_idx, idx_to_frame
+
     def make_dummy_annot(self):
         annotations = np.zeros((0, 7))
-
 
         # parse annotations
         for idx in range(6):
@@ -129,11 +144,9 @@ class CSVDataset(Dataset):
 
         return annotations
 
-
     def __len__(self):
-        #return 16
+        # return 16
         return len(self.image_names)
-
 
     def __getitem__(self, idx):
 
@@ -153,7 +166,9 @@ class CSVDataset(Dataset):
         verb_idx = self.verb_to_idx[verb]
         verb_role = self.verb_info[verb]['order']
         verb_role_idx = [self.role_to_idx[role] for role in verb_role]
-        sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx], 'verb_idx': verb_idx, 'verb_role_idx': verb_role_idx}
+        frame_idx = self.frame_to_idx[frozenset(verb_role)]
+        sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx],
+                  'verb_idx': verb_idx, 'verb_role_idx': verb_role_idx, 'frame_idx': frame_idx}
         if self.transform:
             sample = self.transform(sample)
         return sample
@@ -167,7 +182,6 @@ class CSVDataset(Dataset):
             im = np.array(self.color_change(im))
         else:
             im = np.array(im)
-
 
         return im.astype(np.float32) / 255.0
 
@@ -195,7 +209,6 @@ class CSVDataset(Dataset):
             annotations = np.append(annotations, annotation, axis=0)
 
         return annotations
-
 
     def _read_annotations(self, json, verb_orders, classes):
         result = {}
@@ -235,9 +248,7 @@ class CSVDataset(Dataset):
                 class3 = 'Pad'
                 result[img_file].append(
                     {'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
-
         return result
-
 
     def name_to_label(self, name):
         return self.classes[name]
@@ -268,6 +279,8 @@ def collater(data):
     verb_indices = torch.tensor(verb_indices)
     verb_role_indices = [s['verb_role_idx'] for s in data]
     verb_role_indices = [torch.tensor(vri) for vri in verb_role_indices]
+    frame_indices = [s['frame_idx'] for s in data]
+    frame_indices = torch.tensor(frame_indices)
 
     widths = [int(s.shape[0]) for s in imgs]
     heights = [int(s.shape[1]) for s in imgs]
@@ -280,8 +293,7 @@ def collater(data):
 
     for i in range(batch_size):
         img = imgs[i]
-        padded_imgs[i, shift_0[i]:shift_0[i]+img.shape[0], shift_1[i]:shift_1[i]+img.shape[1], :] = img
-
+        padded_imgs[i, shift_0[i]:shift_0[i] + img.shape[0], shift_1[i]:shift_1[i] + img.shape[1], :] = img
 
     max_num_annots = max(annot.shape[0] for annot in annots)
 
@@ -302,9 +314,10 @@ def collater(data):
     return (util.misc.nested_tensor_from_tensor_list(padded_imgs),
             [{'verbs': vi,
               'roles': vri,
-              'boxes': util.box_ops.box_xyxy_to_cxcywh(annot[:, :4]) / torch.tensor([w, h, w, h], dtype=torch.float32), 
+              'frames': fi,
+              'boxes': util.box_ops.box_xyxy_to_cxcywh(annot[:, :4]) / torch.tensor([w, h, w, h], dtype=torch.float32),
               'labels': annot[:, -3:]}
-              for vi, vri, annot, w, h in zip(verb_indices, verb_role_indices, annot_padded, widths, heights)])
+             for vi, vri, fi, annot, w, h in zip(verb_indices, verb_role_indices, frame_indices, annot_padded, widths, heights)])
 
 
 class Resizer(object):
@@ -312,7 +325,6 @@ class Resizer(object):
 
     def __init__(self, is_for_training):
         self.is_for_training = is_for_training
-
 
     def __call__(self, sample, min_side=512, max_side=700):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
@@ -332,7 +344,7 @@ class Resizer(object):
 
         if self.is_for_training:
             scale_factor = random.choice([1, 0.75, 0.5])
-            scale = scale*scale_factor
+            scale = scale * scale_factor
 
         # resize the image with the computed scale
         image = skimage.transform.resize(image, (int(round(rows_orig * scale)), int(round((cols_orig * scale)))))
@@ -351,12 +363,13 @@ class Resizer(object):
         annots[:, 2][annots[:, 2] > 0] = annots[:, 2][annots[:, 2] > 0] + shift_1
         annots[:, 3][annots[:, 3] > 0] = annots[:, 3][annots[:, 3] > 0] + shift_0
 
-
-        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': image_name, 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx'], 'shift_1': shift_1, 'shift_0': shift_0}
+        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': image_name,
+                'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx'], 'frame_idx': sample['frame_idx'], 'shift_1': shift_1, 'shift_0': shift_0}
 
 
 class Augmenter(object):
     """Convert ndarrays in sample to Tensors."""
+
     def __call__(self, sample, flip_x=0.5):
 
         image, annots, img_name = sample['img'], sample['annot'], sample['img_name']
@@ -373,9 +386,11 @@ class Augmenter(object):
             annots[:, 0][annots[:, 0] > 0] = cols - x2[annots[:, 0] > 0]
             annots[:, 2][annots[:, 2] > 0] = cols - x_tmp[annots[:, 2] > 0]
 
-            sample = {'img': image, 'annot': annots, 'img_name': img_name, 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
+            sample = {'img': image, 'annot': annots, 'img_name': img_name,
+                      'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx'], 'frame_idx': sample['frame_idx']}
 
-        sample = {'img': image, 'annot': annots, 'img_name': img_name, 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
+        sample = {'img': image, 'annot': annots, 'img_name': img_name,
+                  'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx'], 'frame_idx': sample['frame_idx']}
 
         return sample
 
@@ -389,8 +404,8 @@ class Normalizer(object):
     def __call__(self, sample):
         image, annots = sample['img'], sample['annot']
 
-        return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots, 'img_name': sample['img_name'], 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
-
+        return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots, 'img_name': sample['img_name'],
+                'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx'], 'frame_idx': sample['frame_idx']}
 
 
 class UnNormalizer(object):
@@ -457,9 +472,10 @@ def build(image_set, args):
     }
     ann_file = PATHS[image_set]
 
-    classes_file = Path(args.swig_path) / "SWiG_jsons" / "train_classes.csv"
-    verb_path = Path(args.swig_path) / "SWiG_jsons" / "verb_indices.txt"
-    role_path = Path(args.swig_path) / "SWiG_jsons" / "role_indices.txt"
+    classes_file = root / "SWiG_jsons" / "train_classes.csv"
+    verb_path = root / "SWiG_jsons" / "verb_indices.txt"
+    role_path = root / "SWiG_jsons" / "role_indices.txt"
+    frame_path = root / "SWiG_jsons" / "frame_indices.txt"
 
     with open(f'{args.swig_path}/SWiG_jsons/imsitu_space.json') as f:
         all = json.load(f)
@@ -473,14 +489,14 @@ def build(image_set, args):
         "test": transforms.Compose([Normalizer(), Resizer(False)]),
     }
     tfs = TRANSFORMS[image_set]
-    
+
     dataset = CSVDataset(img_folder=str(img_folder),
                          train_file=ann_file,
                          class_list=classes_file,
                          verb_path=verb_path,
                          role_path=role_path,
+                         frame_path=frame_path,
                          verb_info=verb_orders,
                          is_training=is_training,
                          transform=tfs)
     return dataset
-

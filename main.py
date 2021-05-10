@@ -79,8 +79,9 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
-    parser.add_argument('--loss_ratio', default = 1, type=float,
-                        help="Relative loss ratio between noun-loss and verb-loss")
+    parser.add_argument('--noun_loss_coef', default=1, type=float)
+    parser.add_argument('--verb_loss_coef', default=1, type=float)
+    parser.add_argument('--frame_loss_coef', default=1, type=float)
 
     # dataset parameters
     parser.add_argument('--dataset_file', default='swig')
@@ -148,7 +149,6 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
         sampler_val = DistributedSampler(dataset_val, shuffle=False)
@@ -161,9 +161,9 @@ def main(args):
             sampler_train, args.batch_size, drop_last=True)
 
         data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
-                                    collate_fn=utils.collate_fn, num_workers=args.num_workers)
+                                       collate_fn=utils.collate_fn, num_workers=args.num_workers)
         data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
-                                    drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
+                                     drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
     elif args.dataset_file == "swig":
         from datasets.swig import AspectRatioBasedSampler, collater
         # time too long
@@ -172,8 +172,10 @@ def main(args):
         # batch_sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=args.batch_size, drop_last=True)  # TODO check drop_last
         # data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers, drop_last=False, collate_fn=collater, batch_sampler=batch_sampler_val)
         batch_sampler_train = torch.utils.data.BatchSampler(sampler_train, args.batch_size, drop_last=True)
-        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers, collate_fn=collater, batch_sampler=batch_sampler_train)
-        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers, drop_last=False, collate_fn=collater, sampler=sampler_val)
+        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
+                                       collate_fn=collater, batch_sampler=batch_sampler_train)
+        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
+                                     drop_last=False, collate_fn=collater, sampler=sampler_val)
 
     if args.dataset_file == "coco_panoptic":
         # We also evaluate AP during panoptic training, on original coco DS
@@ -202,7 +204,7 @@ def main(args):
     if args.eval:
         if (args.dataset_file == "coco") or (args.dataset_file == "coco_panoptic"):
             test_stats, evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
+                                             data_loader_val, base_ds, device, args.output_dir)
         elif args.dataset_file == "swig":
             test_stats = evaluate_swig(model, criterion, postprocessors,
                                        data_loader_val, device, args.output_dir)
@@ -224,7 +226,7 @@ def main(args):
 
         if (args.dataset_file == "coco") or (args.dataset_file == "coco_panoptic"):
             test_stats, evaluator = evaluate(model, criterion, postprocessors,
-                                                data_loader_val, base_ds, device, args.output_dir)
+                                             data_loader_val, base_ds, device, args.output_dir)
         elif args.dataset_file == "swig":
             test_stats = evaluate_swig(model, criterion, postprocessors,
                                        data_loader_val, device, args.output_dir)

@@ -21,7 +21,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_roles=190, num_verbs=1, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_roles=190, num_verbs=1, num_frames=1, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -34,13 +34,16 @@ class DETR(nn.Module):
         super().__init__()
         self.num_roles = num_roles
         self.num_verbs = num_verbs
+        self.num_frames = num_frames
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
         # self.num_verbs meanins # of embedding number for verb input for decoder
         self.verb_classification = nn.Linear(hidden_dim, 504)
+        self.frame_classification = nn.Linear(hidden_dim, 252)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.query_embed = nn.Embedding(self.num_verbs + self.num_roles, hidden_dim)  # 0 for verb, 1~191 for role
+        self.query_embed = nn.Embedding(self.num_verbs + self.num_frames + self.num_roles,
+                                        hidden_dim)  # 0 for verb, 1~191 for role
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -68,12 +71,15 @@ class DETR(nn.Module):
         assert mask is not None
         hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
 
-        hs_role = hs[:, :, self.num_verbs:]
         hs_verb = hs[:, :, :self.num_verbs]
+        hs_frame = hs[:, :, self.num_verbs:self.num_verbs + self.num_frames]
+        hs_role = hs[:, :, self.num_verbs + self.num_frames:]
         outputs_class = self.class_embed(hs_role)
         outputs_coord = self.bbox_embed(hs_role).sigmoid()
         outputs_verb = self.verb_classification(hs_verb)
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_verb': outputs_verb[-1]}
+        outputs_frame = self.frame_classification(hs_frame)
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
+               'pred_verb': outputs_verb[-1], 'pred_frame': outputs_frame[-1]}
 
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
@@ -300,8 +306,10 @@ class SWiGCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.loss_function = LabelSmoothing(0.2)
         self.loss_function_for_verb = LabelSmoothing(0.2)
+        self.loss_function_for_frame = LabelSmoothing(0.2)
         self.num_verb = 504
         self.num_roles = 190
+        self.num_frames = 252
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -316,6 +324,7 @@ class SWiGCriterion(nn.Module):
 
         role_noun_pred_logits = outputs['pred_logits']
         verb_pred_logits = outputs['pred_verb'].squeeze(dim=1)
+        frame_pred_logits = outputs['pred_frame'].squeeze(dim=1)
 
         for b, t in enumerate(targets):
             role_noun_loss = []
@@ -333,7 +342,13 @@ class SWiGCriterion(nn.Module):
         verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
 
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_error': verb_acc, 'noun_error': noun_acc, 'class_error': torch.tensor(0).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        gt_frames = torch.stack([t['frames'] for t in targets])
+        frame_loss = self.loss_function_for_frame(frame_pred_logits, gt_frames)
+        frame_acc = accuracy(frame_pred_logits, gt_frames)[0]
+
+        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'loss_fce': frame_loss,
+                'verb_acc': verb_acc, 'noun_acc': noun_acc, 'frame_acc': frame_acc,
+                'class_error': torch.tensor(0).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
 
 
 class PostProcess(nn.Module):
@@ -414,8 +429,8 @@ def build(args):
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    weight_dict = {'loss_nce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_vce'] = args.loss_ratio
+    weight_dict = {'loss_nce': args.noun_loss_coef, 'loss_vce': args.verb_loss_coef, 'loss_fce': args.frame_loss_coef,
+                   'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
