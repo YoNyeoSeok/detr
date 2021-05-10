@@ -314,7 +314,7 @@ class SWiGCriterion(nn.Module):
         batch_noun_acc = []
 
         role_noun_pred_logits = outputs['pred_logits']
-        verb_pred_logits = outputs['pred_verb'].squeeze(dim=1)
+        verb_pred_logits = outputs['pred_verb'].squeeze(2)
 
         for b, t in enumerate(targets):
             role_noun_loss = []
