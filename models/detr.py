@@ -32,14 +32,11 @@ class DETR(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.num_roles = num_roles
         self.num_verbs = num_verbs
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.verb_classification = nn.Linear(hidden_dim, 1)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.query_embed = nn.Embedding(self.num_verbs + self.num_roles, hidden_dim)  # 0~503 for verb, 504~693 for role
+        self.query_embed = nn.Embedding(self.num_verbs, hidden_dim)  # 0~503 for verb, 504~693 for role
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -65,17 +62,13 @@ class DETR(nn.Module):
 
         src, mask = features[-1].decompose()
         assert mask is not None
-        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
+        hs_verb = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
 
-        hs_role = hs[:, :, self.num_verbs:]
-        hs_verb = hs[:, :, :self.num_verbs]
-        outputs_class = self.class_embed(hs_role)
-        outputs_coord = self.bbox_embed(hs_role).sigmoid()
         outputs_verb = self.verb_classification(hs_verb)
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_verb': outputs_verb[-1]}
+        out = {'pred_verb': outputs_verb[-1]}
 
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+        # if self.aux_loss:
+        #     out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
         return out
 
     @torch.jit.unused
@@ -297,10 +290,7 @@ class SWiGCriterion(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.weight_dict = weight_dict
-        self.loss_function = LabelSmoothing(0.2)
         self.loss_function_for_verb = LabelSmoothing(0.2)
-        self.num_verb = 504
-        self.num_roles = 190
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -309,31 +299,15 @@ class SWiGCriterion(nn.Module):
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
-        assert 'pred_logits' in outputs
-        batch_noun_loss = []
-        batch_noun_acc = []
-
-        role_noun_pred_logits = outputs['pred_logits']
+        # assert 'pred_logits' in outputs
         verb_pred_logits = outputs['pred_verb'].squeeze(2)
-
-        for b, t in enumerate(targets):
-            role_noun_loss = []
-            for n in range(3):
-                role_noun_loss.append(
-                    self.loss_function(role_noun_pred_logits[b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
-            batch_noun_loss.append(sum(role_noun_loss) / 3)
-            batch_noun_acc += accuracy_swig(
-                role_noun_pred_logits[b, t['roles']], t['labels'][:len(t['roles'])].long().cuda())
-
-        noun_loss = torch.stack(batch_noun_loss).mean()
-        noun_acc = torch.stack(batch_noun_acc).mean()
 
         gt_verbs = torch.stack([t['verbs'] for t in targets])
         verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
 
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc,
-                'class_error': torch.tensor(0).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        return {'loss_vce': verb_loss, 'verb_acc': verb_acc,
+                'class_error': torch.tensor(0).cuda()}
 
 
 class PostProcess(nn.Module):
@@ -408,7 +382,6 @@ def build(args):
         backbone,
         transformer,
         num_classes=num_classes,
-        num_roles=args.num_roles,
         num_verbs=args.num_verbs,
         aux_loss=args.aux_loss,
     )
