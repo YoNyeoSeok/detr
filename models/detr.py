@@ -21,7 +21,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_roles=190, num_verbs=504, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_verbs=504, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -387,8 +387,7 @@ def build(args):
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    weight_dict = {'loss_nce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_vce'] = args.loss_ratio
+    weight_dict = {'loss_vce': args.verb_loss_coef, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
