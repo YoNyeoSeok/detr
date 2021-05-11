@@ -307,7 +307,7 @@ class SWiGCriterion(nn.Module):
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
 
         return {'loss_vce': verb_loss, 'verb_acc': verb_acc,
-                'class_error': torch.tensor(0).cuda()}
+                'class_error': torch.tensor(0.).cuda()}
 
 
 class PostProcess(nn.Module):
