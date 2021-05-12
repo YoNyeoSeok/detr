@@ -106,8 +106,8 @@ class TransformerDecoder(nn.Module):
 
         intermediate = []
 
-        for layer in self.layers:
-            output = layer(output, memory, tgt_mask=tgt_mask,
+        for i, layer in enumerate(self.layers):
+            output = layer(output, memory, tgt_mask=tgt_mask if i == 0 else None,
                            memory_mask=memory_mask,
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
