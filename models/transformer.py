@@ -29,13 +29,15 @@ class Transformer(nn.Module):
 
         decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
+        semi_decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                        dropout, activation, normalize_before, semi=True)
         decoder_norm = nn.LayerNorm(d_model)
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
                                           return_intermediate=return_intermediate_dec)
-        self.semi_decoder_v = TransformerDecoder(decoder_layer, 1, decoder_norm,
-                                            return_intermediate=return_intermediate_dec, semi=True)
-        self.semi_decoder_r = TransformerDecoder(decoder_layer, 1, decoder_norm,
-                                            return_intermediate=return_intermediate_dec, semi=True)
+        self.semi_decoder_v = TransformerDecoder(semi_decoder_layer, 1, decoder_norm,
+                                            return_intermediate=return_intermediate_dec)
+        self.semi_decoder_r = TransformerDecoder(semi_decoder_layer, 1, decoder_norm,
+                                            return_intermediate=return_intermediate_dec)
 
 
         self._reset_parameters()
@@ -74,7 +76,7 @@ class Transformer(nn.Module):
         final_role_pos = torch.cat([pos_embed, torch.zeros_like(verb_query_embed)], axis=0)
         final_role_memory = torch.cat([memory, verb_query_embed], axis=0)
         final_role_mask = torch.zeros((final_role_memory.shape[1::-1]), dtype=mask.dtype, device=mask.device)
-        final_rhs = self.semi_decoder_r(rhs[-1], verb_memory, memory_key_padding_mask=final_role_mask,
+        final_rhs = self.semi_decoder_r(rhs[-1], final_role_memory, memory_key_padding_mask=final_role_mask,
                              pos=final_role_pos, query_pos=final_role_tgt)
 
 
@@ -109,13 +111,12 @@ class TransformerEncoder(nn.Module):
 
 class TransformerDecoder(nn.Module):
 
-    def __init__(self, decoder_layer, num_layers, norm=None, return_intermediate=False, semi=False):
+    def __init__(self, decoder_layer, num_layers, norm=None, return_intermediate=False):
         super().__init__()
         self.layers = _get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
         self.return_intermediate = return_intermediate
-        self.semi = semi
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -133,7 +134,7 @@ class TransformerDecoder(nn.Module):
                            memory_mask=memory_mask,
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
-                           pos=pos, query_pos=query_pos, semi=self.semi)
+                           pos=pos, query_pos=query_pos)
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
 
