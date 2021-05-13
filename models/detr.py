@@ -36,11 +36,17 @@ class DETR(nn.Module):
         self.num_role_queries = num_role_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.verb_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
+        self.verb_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim*2, hidden_dim),
                                              nn.ReLU(True),
                                              nn.Dropout(0.1),
                                              nn.Linear(hidden_dim, 504))
-        self.class_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
+        self.class_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim*2, hidden_dim),
                                              nn.ReLU(True),
                                              nn.Dropout(0.1),
                                              nn.Linear(hidden_dim, num_classes))
@@ -319,8 +325,7 @@ class SWiGCriterion(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.weight_dict = weight_dict
-        #self.loss_function = FocalLoss(gamma=2)
-        self.loss_function = LabelSmoothing(0.1)
+        self.loss_function = FocalLoss(gamma=2)
         self.loss_function_verb = LabelSmoothing(0.1)
 
     def forward(self, outputs, targets):
