@@ -21,7 +21,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -32,12 +32,15 @@ class DETR(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.num_queries = num_queries
+        self.num_verb_queries = num_verb_queries
+        self.num_role_queries = num_role_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        self.verb_linear = nn.Linear(hidden_dim, 504)
+        self.class_linear = nn.Linear(hidden_dim, num_classes)
+        self.bbox_embed = None
+        self.verb_query_embed = nn.Embedding(num_verb_queries, hidden_dim)
+        self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -63,13 +66,11 @@ class DETR(nn.Module):
 
         src, mask = features[-1].decompose()
         assert mask is not None
-        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
-
-        outputs_class = self.class_embed(hs)
-        outputs_coord = self.bbox_embed(hs).sigmoid()
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+        rhs, vhs, _ = self.transformer(self.input_proj(src), mask,
+                                       self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
+        outputs_verb = self.verb_linear(vhs)
+        outputs_class = self.class_linear(rhs)
+        out = {'pred_verb': outputs_verb[-1], 'pred_logits': outputs_class[-1]}
         return out
 
     @torch.jit.unused
@@ -292,6 +293,7 @@ class SWiGCriterion(nn.Module):
         self.num_classes = num_classes
         self.weight_dict = weight_dict
         self.loss_function = LabelSmoothing(0.2)
+        self.loss_function_verb = LabelSmoothing(0.2)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -314,7 +316,14 @@ class SWiGCriterion(nn.Module):
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
-        return {'loss_ce': noun_loss, 'noun_acc': noun_acc, 'class_error': torch.tensor(0).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        # assert 'pred_logits' in outputs
+        verb_pred_logits = outputs['pred_verb'].squeeze(1)
+        gt_verbs = torch.stack([t['verbs'] for t in targets])
+        verb_loss = self.loss_function_verb(verb_pred_logits, gt_verbs)
+        verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
+
+        return {'loss_nce': noun_loss, 'noun_acc': noun_acc, 'loss_vce': verb_loss, 'verb_acc': verb_acc,
+                'class_error': torch.tensor(0.).cuda()}
 
 
 class PostProcess(nn.Module):
@@ -379,7 +388,6 @@ def build(args):
         num_classes = 250
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
-        assert args.num_queries == 190  # 190 or 504+190
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -389,13 +397,14 @@ def build(args):
     model = DETR(
         backbone,
         transformer,
-        num_classes=num_classes,
-        num_queries=args.num_queries,
+        num_classes=num_classes,  # num_noun_classes
+        num_verb_queries=args.num_verb_queries,
+        num_role_queries=args.num_role_queries,
         aux_loss=args.aux_loss,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict = {'loss_nce': args.noun_loss_coef, 'loss_vce': args.verb_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef

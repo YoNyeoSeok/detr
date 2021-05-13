@@ -52,8 +52,10 @@ def get_args_parser():
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_queries', default=190, type=int,
-                        help="Number of query slots")
+    parser.add_argument('--num_verb_queries', type=int,
+                        help="Number of verb query slots")
+    parser.add_argument('--num_role_queries', type=int,
+                        help="Number of role query slots")
     parser.add_argument('--pre_norm', action='store_true')
 
     # * Segmentation
@@ -77,6 +79,8 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
+    parser.add_argument('--noun_loss_coef', default=1, type=float)
+    parser.add_argument('--verb_loss_coef', default=1, type=float)
 
     # dataset parameters
     parser.add_argument('--dataset_file', default='imsitu')
