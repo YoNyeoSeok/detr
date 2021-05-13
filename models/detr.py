@@ -36,8 +36,20 @@ class DETR(nn.Module):
         self.num_role_queries = num_role_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.verb_linear = nn.Linear(hidden_dim, 504)
-        self.class_linear = nn.Linear(hidden_dim, num_classes)
+        self.verb_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim*2, hidden_dim),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim, 504))
+        self.class_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim*2, hidden_dim),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim, num_classes))
         self.bbox_embed = None
         self.verb_query_embed = nn.Embedding(num_verb_queries, hidden_dim)
         self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
@@ -68,8 +80,8 @@ class DETR(nn.Module):
         assert mask is not None
         rhs, vhs, _ = self.transformer(self.input_proj(src), mask,
                                        self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
-        outputs_verb = self.verb_linear(vhs)
-        outputs_class = self.class_linear(rhs)
+        outputs_verb = self.verb_classifier(vhs)
+        outputs_class = self.class_classifier(rhs)
         out = {'pred_verb': outputs_verb[-1], 'pred_logits': outputs_class[-1]}
         return out
 
@@ -279,7 +291,28 @@ class LabelSmoothing(nn.Module):
         nll_loss = nll_loss.squeeze(1)
         smooth_loss = -logprobs.mean(dim=-1)
         loss = self.confidence * nll_loss + self.smoothing * smooth_loss
+
         return loss.mean()
+
+class FocalLoss(nn.Module):
+    """
+    FocalLoss
+    """
+
+    def __init__(self, gamma=2):
+        """
+        Constructor for the Focal Loss.
+        """
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+
+    def forward(self, x, target):
+        # -log(pt) == ce_loss
+        ce_loss = F.cross_entropy(x, target, reduciton='mean')
+        pt = torch.exp((-1) * ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+
+        return focal_loss
 
 
 class SWiGCriterion(nn.Module):
@@ -292,8 +325,8 @@ class SWiGCriterion(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.weight_dict = weight_dict
-        self.loss_function = LabelSmoothing(0.2)
-        self.loss_function_verb = LabelSmoothing(0.2)
+        self.loss_function = FocalLoss(gamma=2)
+        self.loss_function_verb = LabelSmoothing(0.1)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
