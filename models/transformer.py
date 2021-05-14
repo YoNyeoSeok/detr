@@ -218,21 +218,22 @@ class TransformerDecoderLayer(nn.Module):
 
         if not semi:
             self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-            self.norm1 = nn.LayerNorm(d_model)
-            self.dropout1 = nn.Dropout(dropout)
+            # Implementation of Feedforward model
+            self.linear1 = nn.Linear(d_model, dim_feedforward)
+            self.dropout = nn.Dropout(dropout)
+            self.linear2 = nn.Linear(dim_feedforward, d_model)
+            self.dropout2 = nn.Dropout(dropout)
+            self.dropout3 = nn.Dropout(dropout)
+            self.activation = _get_activation_fn(activation)
 
+        self.dropout1 = nn.Dropout(dropout)
         self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model)
-
+        self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
-        self.dropout2 = nn.Dropout(dropout)
-        self.dropout3 = nn.Dropout(dropout)
+        if semi:
+            self.norm4 = nn.LayerNorm(d_model)
 
-        self.activation = _get_activation_fn(activation)
         self.normalize_before = normalize_before
         self.semi = semi
 
@@ -264,10 +265,16 @@ class TransformerDecoderLayer(nn.Module):
             tgt = self.norm3(tgt)
 
         else:
-            tgt = self.multihead_attn(query=tgt,
-                                   key=self.with_pos_embed(memory, pos),
-                                   value=memory, attn_mask=memory_mask,
+            tgt2 = tgt
+            q = self.norm1(tgt)
+            k = self.norm2(self.with_pos_embed(memory, pos))
+            v = self.norm3(memory)
+            tgt = self.multihead_attn(query=q,
+                                   key=k,
+                                   value=v, attn_mask=memory_mask,
                                    key_padding_mask=memory_key_padding_mask)[0]
+            tgt = tgt2 + self.dropout1(tgt)
+            tgt = self.norm4(tgt)
 
         return tgt
 
@@ -296,11 +303,16 @@ class TransformerDecoderLayer(nn.Module):
             tgt = tgt + self.dropout3(tgt2)
 
         else:
-            tgt = self.multihead_attn(query=tgt,
-                                   key=self.with_pos_embed(memory, pos),
-                                   value=memory, attn_mask=memory_mask,
+            tgt2 = tgt
+            q = self.norm1(tgt)
+            k = self.norm2(self.with_pos_embed(memory, pos))
+            v = self.norm3(memory)
+            tgt = self.multihead_attn(query=q,
+                                   key=k,
+                                   value=v, attn_mask=memory_mask,
                                    key_padding_mask=memory_key_padding_mask)[0]
-
+            tgt = tgt2 + self.dropout1(tgt)
+            tgt = self.norm4(tgt)
 
         return tgt
 
