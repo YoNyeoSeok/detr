@@ -174,10 +174,10 @@ class MetricLogger(object):
         noun_acc = np.array(self.noun_acc)
         verb_acc = np.array(self.verb_acc)
         with open('./record/semi_vr_noun_acc{}.txt'.format(dev), 'a') as f:
-            f.write(noun_acc)
+            f.write(str(float(noun_acc)))
             f.write('\n')
         with open('./record/semi_vr_verb_acc{}.txt'.format(dev), 'a') as f:
-            f.write(verb_acc)
+            f.write(str(float(verb_acc)))
             f.write('\n')
 
     def __getattr__(self, attr):
