@@ -75,8 +75,8 @@ class DETR(nn.Module):
         batch_vhs = []
 
         for i in range(src.shape[0]): #batchsize
-            selected_query_embed = self.role_embed.weight[targets[i]['roles']]
-            sliced_rhs, sliced_vhs, _ = self.transformer(self.input_proj(src[i:i+1]), mask[i:i+1], selected_query_embed, pos[-1][i:i+1]) # hs : num_layer x 1 x num_queries x hidden_dim
+            selected_query_embed = self.role_query_embed.weight[targets[i]['roles']]
+            sliced_rhs, sliced_vhs, _ = self.transformer(self.input_proj(src[i:i+1]), mask[i:i+1], self.verb_query_embed.weight, selected_query_embed, pos[-1][i:i+1]) # hs : num_layer x 1 x num_queries x hidden_dim
             padded_rhs = F.pad(sliced_rhs, (0,0,0,6-len(selected_query_embed)), mode='constant', value=0)
             batch_rhs.append(padded_rhs)
             batch_vhs.append(sliced_vhs)
@@ -84,7 +84,7 @@ class DETR(nn.Module):
         rhs = torch.cat(batch_rhs, dim=1)
         vhs = torch.cat(batch_vhs, dim=1)   
         outputs_class = self.class_embed(rhs)
-        outputs_verb = self.verb_classifier(vhs)
+        outputs_verb = self.verb_classifier(vhs).view(-1, 504)
         out = {'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb}
 
         return out
@@ -337,7 +337,7 @@ class SWiGCriterion(nn.Module):
         verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
         
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc, 'class_error': torch.tensor(0.).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc, 'class_error': torch.tensor(0.).cuda()}
 
 
 class PostProcess(nn.Module):
@@ -413,8 +413,8 @@ def build(args):
         backbone,
         transformer,
         num_classes=num_classes,
-        num_verb_queries=args.num_verb_queries,
-        num_role_queries=args.num_role_queries,
+        num_verb_queries=args.num_verbs,
+        num_role_queries=args.num_roles,
         aux_loss=args.aux_loss,
     )
     if args.masks:
