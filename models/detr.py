@@ -41,7 +41,7 @@ class DETR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-        self.avg_pool = nn.AvgPool2d(22)
+        self.avg_pool = nn.AvgPool2d(7)
         self.verb_classifier = nn.Linear(hidden_dim, 504)
 
     def forward(self, samples: NestedTensor, targets):
@@ -68,19 +68,9 @@ class DETR(nn.Module):
 
         src, mask = features[-1].decompose()
         assert mask is not None
-        
-        batch_hs = []
-        batch_memory = []
 
-        for i in range(src.shape[0]): #batchsize
-            selected_query_embed = self.role_embed.weight[targets[i]['roles']]
-            sliced_hs, sliced_memory = self.transformer(self.input_proj(src[i:i+1]), mask[i:i+1], selected_query_embed, pos[-1][i:i+1]) # hs : num_layer x 1 x num_queries x hidden_dim
-            padded_hs = F.pad(sliced_hs, (0,0,0,6-len(selected_query_embed)), mode='constant', value=0)
-            batch_hs.append(padded_hs)
-            batch_memory.append(sliced_memory)    
-        
-        hs = torch.cat(batch_hs, dim=1)
-        memory = torch.cat(batch_memory, dim=0) #bs * c * h * w       
+        hs, memory = self.transformer(self.input_proj(src), mask, self.role_embed.weight, pos[-1])
+
         outputs_class = self.class_embed(hs)
         outputs_verb = self.avg_pool(memory).squeeze(dim=2).squeeze(dim=2)
         outputs_verb = self.verb_classifier(outputs_verb)
@@ -326,12 +316,13 @@ class SWiGCriterion(nn.Module):
         verb_pred_logits = outputs['pred_verb']
 
         for b, (p, t) in enumerate(zip(outputs['pred_logits'], targets)):
-            num_roles = len(t['roles'])
+            roles = t['roles']
             role_noun_loss = []
             for n in range(3):
-                role_noun_loss.append(self.loss_function(p[:num_roles], t['labels'][:num_roles, n].long().cuda()))
-            batch_noun_loss.append(sum(role_noun_loss)/3)
-            batch_noun_acc += accuracy_swig(p[:num_roles], t['labels'][:num_roles].long().cuda())
+                role_noun_loss.append(self.loss_function(
+                    p[roles], t['labels'][:len(roles), n].long().cuda()))
+            batch_noun_loss.append(sum(role_noun_loss))
+            batch_noun_acc += accuracy_swig(p[roles], t['labels'][:len(roles)].long().cuda())
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
@@ -339,7 +330,8 @@ class SWiGCriterion(nn.Module):
         verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
         
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc, 'class_error': torch.tensor(0.).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc,
+                'class_error': torch.tensor(0.).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
 
 
 class PostProcess(nn.Module):
@@ -402,9 +394,8 @@ def build(args):
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
         num_classes = 250
-    elif args.dataset_file == "swig":
+    elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
-        assert args.num_roles == 190  # 190 or 504+190
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -436,7 +427,7 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
     if args.masks:
         losses += ["masks"]
-    if args.dataset_file != "swig":
+    if args.dataset_file != "swig" and args.dataset_file != "imsitu":
         matcher = build_matcher(args)
         criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                                  eos_coef=args.eos_coef, losses=losses)

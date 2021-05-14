@@ -83,9 +83,10 @@ def get_args_parser():
                         help="Relative loss ratio between noun-loss and verb-loss")
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='swig')
+    parser.add_argument('--dataset_file', default='imsitu')
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
+    parser.add_argument('--imsitu_path', type=str, default="imSitu")
     parser.add_argument('--swig_path', type=str, default="SWiG")
     parser.add_argument('--remove_difficult', action='store_true')
 
@@ -125,7 +126,7 @@ def main(args):
 
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
-    if args.dataset_file == "swig":
+    if args.dataset_file == "swig" or args.dataset_file == "imsitu":
         args.num_classes = dataset_train.num_nouns()
     model, criterion, postprocessors = build_model(args)
     model.to(device)
@@ -148,7 +149,6 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
         sampler_val = DistributedSampler(dataset_val, shuffle=False)
@@ -161,9 +161,9 @@ def main(args):
             sampler_train, args.batch_size, drop_last=True)
 
         data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
-                                    collate_fn=utils.collate_fn, num_workers=args.num_workers)
+                                       collate_fn=utils.collate_fn, num_workers=args.num_workers)
         data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
-                                    drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
+                                     drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
     elif args.dataset_file == "swig":
         from datasets.swig import AspectRatioBasedSampler, collater
         # time too long
@@ -172,8 +172,17 @@ def main(args):
         # batch_sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=args.batch_size, drop_last=True)  # TODO check drop_last
         # data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers, drop_last=False, collate_fn=collater, batch_sampler=batch_sampler_val)
         batch_sampler_train = torch.utils.data.BatchSampler(sampler_train, args.batch_size, drop_last=True)
-        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers, collate_fn=collater, batch_sampler=batch_sampler_train)
-        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers, drop_last=False, collate_fn=collater, sampler=sampler_val)
+        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
+                                       collate_fn=collater, batch_sampler=batch_sampler_train)
+        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
+                                     drop_last=False, collate_fn=collater, sampler=sampler_val)
+    elif args.dataset_file == "imsitu":
+        from datasets.imsitu import collater
+        batch_sampler_train = torch.utils.data.BatchSampler(sampler_train, args.batch_size, drop_last=True)
+        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
+                                       collate_fn=collater, batch_sampler=batch_sampler_train)
+        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
+                                     drop_last=False, collate_fn=collater, sampler=sampler_val)
 
     if args.dataset_file == "coco_panoptic":
         # We also evaluate AP during panoptic training, on original coco DS
@@ -202,8 +211,8 @@ def main(args):
     if args.eval:
         if (args.dataset_file == "coco") or (args.dataset_file == "coco_panoptic"):
             test_stats, evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
-        elif args.dataset_file == "swig":
+                                             data_loader_val, base_ds, device, args.output_dir)
+        elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
             test_stats = evaluate_swig(model, criterion, postprocessors,
                                        data_loader_val, device, args.output_dir)
         if args.output_dir:
@@ -212,6 +221,7 @@ def main(args):
         return
 
     min_test_loss = np.inf
+    max_test_acc_noun = -np.inf
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -224,8 +234,8 @@ def main(args):
 
         if (args.dataset_file == "coco") or (args.dataset_file == "coco_panoptic"):
             test_stats, evaluator = evaluate(model, criterion, postprocessors,
-                                                data_loader_val, base_ds, device, args.output_dir)
-        elif args.dataset_file == "swig":
+                                             data_loader_val, base_ds, device, args.output_dir)
+        elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
             test_stats = evaluate_swig(model, criterion, postprocessors,
                                        data_loader_val, device, args.output_dir)
 
@@ -236,9 +246,10 @@ def main(args):
 
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
-            # extra checkpoint for every new min loss
-            if log_stats['test_loss'] < min_test_loss:
-                min_test_loss = log_stats['test_loss']
+            # extra checkpoint for every new min loss or new max acc
+            if log_stats['test_loss'] < min_test_loss or log_stats['test_noun_acc_unscaled'] > max_test_acc_noun:
+                min_test_loss = log_stats['test_loss'] if log_stats['test_loss'] < min_test_loss else min_test_loss
+                max_test_acc_noun = log_stats['test_loss'] if log_stats['test_noun_acc_unscaled'] > max_test_acc_noun else max_test_acc_noun
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
