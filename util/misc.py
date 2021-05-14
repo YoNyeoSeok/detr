@@ -15,6 +15,7 @@ from typing import Optional, List
 import torch
 import torch.distributed as dist
 from torch import Tensor
+import numpy as np
 
 # needed due to empty tensor bug in pytorch and torchvision 0.5
 import torchvision
@@ -159,6 +160,8 @@ class MetricLogger(object):
     def __init__(self, delimiter="\t"):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
+        self.noun_acc = []
+        self.verb_acc = []
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -166,6 +169,16 @@ class MetricLogger(object):
                 v = v.item()
             assert isinstance(v, (float, int))
             self.meters[k].update(v)
+
+    def save_vr(self, dev=''):
+        noun_acc = np.array(self.noun_acc)
+        verb_acc = np.array(self.verb_acc)
+        with open('./record/semi_vr_noun_acc{}.txt'.format(dev), 'a') as f:
+            f.write(noun_acc)
+            f.write('\n')
+        with open('./record/semi_vr_verb_acc{}.txt'.format(dev), 'a') as f:
+            f.write(verb_acc)
+            f.write('\n')
 
     def __getattr__(self, attr):
         if attr in self.meters:
@@ -237,12 +250,21 @@ class MetricLogger(object):
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
+
             i += 1
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {} ({:.4f} s / it)'.format(
             header, total_time_str, total_time / len(iterable)))
+
+        for name, value in self.meters.items():
+            if name == 'noun_acc_unscaled':
+                self.noun_acc.append(value.global_avg)
+            elif name == 'verb_acc_unscaled':
+                self.verb_acc.append(value.global_avg)
+
+
 
 
 def get_sha():

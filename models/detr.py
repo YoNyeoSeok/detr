@@ -325,7 +325,8 @@ class SWiGCriterion(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.weight_dict = weight_dict
-        self.loss_function = FocalLoss(gamma=2)
+        #self.loss_function = FocalLoss(gamma=2)
+        self.loss_function = LabelSmoothing(0.1)
         self.loss_function_verb = LabelSmoothing(0.1)
 
     def forward(self, outputs, targets):

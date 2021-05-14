@@ -61,6 +61,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
+    metric_logger.save_vr()
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
@@ -214,6 +215,7 @@ def evaluate_swig(model, criterion, postprocessors, data_loader, device, output_
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
+    metric_logger.save_vr(dev='_dev')
     # if coco_evaluator is not None:
     #     coco_evaluator.synchronize_between_processes()
     if panoptic_evaluator is not None:
