@@ -93,8 +93,19 @@ class DETR(nn.Module):
                     selected_role_query_embed, selected_verb_query_embed], axis=1)
             # sliced_hs : num_layer x 1 x num or selected role_queries x hidden_dim
             # sliced_memory : 1 x hidden_dim x H x W
-            sliced_hs, sliced_memory = self.transformer(
-                self.input_proj(src[i:i + 1]), mask[i:i + 1], selected_query_embed, pos[-1][i:i + 1])
+            sliced_src = self.input_proj(src[i:i + 1])
+            sliced_mask = mask[i:i + 1]
+            sliced_pos_embed = pos[-1][i:i + 1]
+            query_embed = selected_query_embed
+            
+            # transformer forward
+            bs, c, h, w = sliced_src.shape
+            sliced_src = sliced_src.flatten(2).permute(2, 0, 1)
+            sliced_mask, query_embed, sliced_pos_embed = self.transformer.preprocess(bs, sliced_mask, query_embed, sliced_pos_embed)
+            sliced_memory = self.transformer.forward_encoder(sliced_src, sliced_mask, query_embed, sliced_pos_embed)
+            sliced_hs = self.transformer.forward_decoder(sliced_memory, sliced_mask, query_embed, sliced_pos_embed)
+            sliced_hs, sliced_memory = self.transformer.postprocess(sliced_hs, sliced_memory, (bs, c, h, w))
+
             if not self.gt_role_queries:
                 padded_hs = sliced_hs
             else:
