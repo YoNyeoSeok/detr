@@ -56,8 +56,8 @@ def get_args_parser():
                         help="Number of verb embed to cat role query slots")
     parser.add_argument('--num_role_queries', type=int, choices=[190],
                         help="Number of role query slots")
-    parser.add_argument('--gt_role_queries', action="store_true",
-                        help="Select gt role queries")
+    parser.add_argument('--select_verb_role_queries', action="store_true",
+                        help="Select role queries from verb prediction or use all")
     parser.add_argument('--pre_norm', action='store_true')
 
     # * Segmentation
