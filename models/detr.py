@@ -43,7 +43,7 @@ class DETR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-        self.avg_pool = nn.AvgPool2d(22)
+        self.avg_pool = nn.AvgPool2d(7)
         self.verb_classifier = nn.Linear(hidden_dim*2, 504)
 
     def forward(self, samples: NestedTensor, targets):
