@@ -71,21 +71,27 @@ class DETR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
         
+        """
         batch_rhs = []
         batch_vhs = []
-
-        for i in range(src.shape[0]): #batchsize
+        for i in range(src.shape[0]): 
             selected_query_embed = self.role_query_embed.weight[targets[i]['roles']]
             sliced_rhs, sliced_vhs, _ = self.transformer(self.input_proj(src[i:i+1]), mask[i:i+1], self.verb_query_embed.weight, selected_query_embed, pos[-1][i:i+1]) # hs : num_layer x 1 x num_queries x hidden_dim
             padded_rhs = F.pad(sliced_rhs, (0,0,0,6-len(selected_query_embed)), mode='constant', value=0)
             batch_rhs.append(padded_rhs)
             batch_vhs.append(sliced_vhs)
-        
         rhs = torch.cat(batch_rhs, dim=1)
         vhs = torch.cat(batch_vhs, dim=1)   
         outputs_class = self.class_embed(rhs)
         outputs_verb = self.verb_classifier(vhs).view(-1, 504)
         out = {'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb}
+        """
+        rhs, vhs, _ = self.transformer(self.input_proj(src), mask,
+                                self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
+        outputs_class = self.class_embed(rhs)
+        outputs_verb = self.verb_classifier(vhs)
+
+        out = {'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb[-1]}
 
         return out
 
@@ -309,7 +315,7 @@ class SWiGCriterion(nn.Module):
         self.num_classes = num_classes
         self.weight_dict = weight_dict
         self.loss_function = LabelSmoothing(0.2)
-        self.loss_function_for_verb = LabelSmoothing(0.2)
+        self.loss_function_verb = LabelSmoothing(0.2)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -321,24 +327,25 @@ class SWiGCriterion(nn.Module):
         assert 'pred_logits' in outputs
         batch_noun_loss = []
         batch_noun_acc = []
-        verb_pred_logits = outputs['pred_verb']
-
-        for b, (p, t) in enumerate(zip(outputs['pred_logits'], targets)):
-            num_roles = len(t['roles'])
+        for b, t in enumerate(targets):
             role_noun_loss = []
             for n in range(3):
-                role_noun_loss.append(self.loss_function(p[:num_roles], t['labels'][:num_roles, n].long().cuda()))
-            batch_noun_loss.append(sum(role_noun_loss)/3)
-            batch_noun_acc += accuracy_swig(p[:num_roles], t['labels'][:num_roles].long().cuda())
+                role_noun_loss.append(self.loss_function(
+                    outputs['pred_logits'][b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
+            batch_noun_loss.append(sum(role_noun_loss))
+            batch_noun_acc += accuracy_swig(outputs['pred_logits'][b, t['roles']],
+                                            t['labels'][:len(t['roles'])].long().cuda())
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
+        # assert 'pred_logits' in outputs
+        verb_pred_logits = outputs['pred_verb'].squeeze(1)
         gt_verbs = torch.stack([t['verbs'] for t in targets])
-        verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
+        verb_loss = self.loss_function_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
-        
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc, 'class_error': torch.tensor(0.).cuda()}
 
+        return {'loss_nce': noun_loss, 'noun_acc': noun_acc, 'loss_vce': verb_loss, 'verb_acc': verb_acc,
+                'class_error': torch.tensor(0.).cuda()}
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
