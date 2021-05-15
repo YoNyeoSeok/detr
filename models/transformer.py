@@ -50,12 +50,11 @@ class Transformer(nn.Module):
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
         return mask, query_embed, pos_embed
 
-    def forward_encoder(self, src, mask, query_embed, pos_embed):
+    def forward_encoder(self, src, mask, pos_embed):
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
         return memory
 
-    def forward_decoder(self, memory, mask, query_embed, pos_embed):
-        tgt = torch.zeros_like(query_embed)
+    def forward_decoder(self, tgt, memory, mask, query_embed, pos_embed):
         hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
                           pos=pos_embed, query_pos=query_embed)
         return hs
@@ -68,8 +67,9 @@ class Transformer(nn.Module):
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
         mask, query_embed, pos_embed = self.preprocess(bs, mask, query_embed, pos_embed)
-        memory = self.forward_encoder(src, mask, query_embed, pos_embed)
-        hs = self.forward_decoder(memory, mask, query_embed, pos_embed)
+        memory = self.forward_encoder(src, mask, pos_embed)
+        tgt = torch.zeros_like(query_embed)
+        hs = self.forward_decoder(tgt, memory, mask, query_embed, pos_embed)
         hs, memory = self.postprocess(hs, memory, (bs, c, h, w))
         return hs, memory
 
