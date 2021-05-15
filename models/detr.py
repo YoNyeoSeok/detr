@@ -39,7 +39,6 @@ class DETR(nn.Module):
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         if num_verb_embed == 0:
             self.role_embed = nn.Embedding(num_role_queries, hidden_dim)
         else:
@@ -100,10 +99,7 @@ class DETR(nn.Module):
         hs = torch.cat(batch_hs, dim=1)
 
         outputs_class = self.class_embed(hs)
-        outputs_coord = self.bbox_embed(hs).sigmoid()
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+        out = {'pred_logits': outputs_class[-1]}
         return out
 
     @torch.jit.unused
@@ -352,7 +348,7 @@ class SWiGCriterion(nn.Module):
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
-        return {'loss_ce': noun_loss, 'noun_acc': noun_acc, 'class_error': torch.tensor(0.).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        return {'loss_ce': noun_loss, 'noun_acc': noun_acc, 'class_error': torch.tensor(0.).cuda()}
 
 
 class PostProcess(nn.Module):
