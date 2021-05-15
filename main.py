@@ -40,9 +40,9 @@ def get_args_parser():
                         help="Type of positional embedding to use on top of the image features")
 
     # * Transformer
-    parser.add_argument('--enc_layers', default=1, type=int,
+    parser.add_argument('--enc_layers', default=6, type=int,
                         help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=1, type=int,
+    parser.add_argument('--dec_layers', default=6, type=int,
                         help="Number of decoding layers in the transformer")
     parser.add_argument('--dim_feedforward', default=2048, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
@@ -52,10 +52,12 @@ def get_args_parser():
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_verbs', default=1, type=int,
-                        help="Number of verb slots")
-    parser.add_argument('--num_roles', default=190, type=int,
-                        help="Number of role slots")
+    parser.add_argument('--num_verb_embed', type=int, choices=[504, 1, 0],
+                        help="Number of verb embed to cat role query slots")
+    parser.add_argument('--num_role_queries', type=int, choices=[190],
+                        help="Number of role query slots")
+    parser.add_argument('--gt_role_queries', action="store_true",
+                        help="Select gt role queries")
     parser.add_argument('--pre_norm', action='store_true')
 
     # * Segmentation
