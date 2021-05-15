@@ -71,21 +71,6 @@ class DETR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
         
-        """
-        batch_rhs = []
-        batch_vhs = []
-        for i in range(src.shape[0]): 
-            selected_query_embed = self.role_query_embed.weight[targets[i]['roles']]
-            sliced_rhs, sliced_vhs, _ = self.transformer(self.input_proj(src[i:i+1]), mask[i:i+1], self.verb_query_embed.weight, selected_query_embed, pos[-1][i:i+1]) # hs : num_layer x 1 x num_queries x hidden_dim
-            padded_rhs = F.pad(sliced_rhs, (0,0,0,6-len(selected_query_embed)), mode='constant', value=0)
-            batch_rhs.append(padded_rhs)
-            batch_vhs.append(sliced_vhs)
-        rhs = torch.cat(batch_rhs, dim=1)
-        vhs = torch.cat(batch_vhs, dim=1)   
-        outputs_class = self.class_embed(rhs)
-        outputs_verb = self.verb_classifier(vhs).view(-1, 504)
-        out = {'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb}
-        """
         rhs, vhs, _ = self.transformer(self.input_proj(src), mask,
                                 self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
         outputs_class = self.class_embed(rhs)
@@ -407,7 +392,7 @@ def build(args):
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
         num_classes = 250
-    elif args.dataset_file == "swig":
+    elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
         assert args.num_roles == 190  # 190 or 504+190
     device = torch.device(args.device)
@@ -442,7 +427,7 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
     if args.masks:
         losses += ["masks"]
-    if args.dataset_file != "swig":
+    if args.dataset_file != "swig" and args.dataset_file != "imsitu":
         matcher = build_matcher(args)
         criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                                  eos_coef=args.eos_coef, losses=losses)
