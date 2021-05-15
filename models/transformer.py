@@ -35,7 +35,9 @@ class Transformer(nn.Module):
                                           return_intermediate=return_intermediate_dec)
         semi_decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                         dropout, activation, normalize_before, semi=True)
-        self.semi_decoder_v = TransformerDecoder(semi_decoder_layer, 1, decoder_norm,
+        self.semi_decoder_v_e = TransformerDecoder(semi_decoder_layer, 1, decoder_norm,
+                                            return_intermediate=return_intermediate_dec)
+        self.semi_decoder_v_r = TransformerDecoder(semi_decoder_layer, 1, decoder_norm,
                                             return_intermediate=return_intermediate_dec)
         self.semi_decoder_r = TransformerDecoder(semi_decoder_layer, 1, decoder_norm,
                                             return_intermediate=return_intermediate_dec)
@@ -67,19 +69,22 @@ class Transformer(nn.Module):
                            pos=pos_embed, query_pos=role_tgt)
 
         verb_tgt = torch.zeros_like(verb_query_embed)
-        verb_pos = torch.cat([pos_embed, torch.zeros_like(rhs[-1])], axis=0)
-        verb_memory = torch.cat([memory, rhs[-1]], axis=0)
-        verb_mask = torch.zeros((verb_memory.shape[1::-1]), dtype=mask.dtype, device=mask.device)
-        vhs = self.semi_decoder_v(verb_query_embed, verb_memory, memory_key_padding_mask=verb_mask,
-                             pos=verb_pos, query_pos=verb_tgt)
+        vehs_mask = torch.zeros((memory.shape[1::-1]), dtype=mask.dtype, device=mask.device)
+        vehs = self.semi_decoder_v_e(verb_query_embed, memory, memory_key_padding_mask=vehs_mask,
+                             pos=pos_embed, query_pos=verb_tgt)
+        vrhs_mask = torch.zeros((rhs[-1].shape[1::-1]), dtype=mask.dtype, device=mask.device)
+        vrhs = self.semi_decoder_v_e(verb_query_embed, rhs[-1], memory_key_padding_mask=vrhs_mask,
+                             pos=torch.zeros_like(rhs[-1]), query_pos=verb_tgt)
+        vhs = torch.cat([vehs, vrhs], axis=0)
 
         final_role_tgt = torch.zeros_like(rhs[-1])
-        final_role_pos = torch.cat([pos_embed, torch.zeros_like(verb_query_embed)], axis=0)
-        final_role_memory = torch.cat([memory, verb_query_embed], axis=0)
-        final_role_mask = torch.zeros((final_role_memory.shape[1::-1]), dtype=mask.dtype, device=mask.device)
-        final_rhs = self.semi_decoder_r(rhs[-1], final_role_memory, memory_key_padding_mask=final_role_mask,
-                             pos=final_role_pos, query_pos=final_role_tgt)
-
+        final_rehs_mask = torch.zeros((memory.shape[1::-1]), dtype=mask.dtype, device=mask.device)
+        final_rehs = self.semi_decoder_r(rhs[-1], memory, memory_key_padding_mask=final_rehs_mask,
+                             pos=pos_embed, query_pos=final_role_tgt)
+        final_rvhs_mask = torch.zeros((verb_query_embed.shape[1::-1]), dtype=mask.dtype, device=mask.device)
+        final_rvhs = self.semi_decoder_r(rhs[-1], verb_query_embed, memory_key_padding_mask=final_rvhs_mask,
+                             pos=torch.zeros_like(verb_query_embed), query_pos=final_role_tgt)
+        final_rhs = torch.cat([final_rehs, final_rvhs], axis=0)
 
         return final_rhs.transpose(1, 2), vhs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
 

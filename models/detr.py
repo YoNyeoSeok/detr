@@ -35,7 +35,10 @@ class DETR(nn.Module):
         self.num_role_queries = num_role_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
+        self.class_embed = nn.Sequential(nn.Linear(hidden_dim*2, hidden_dim*4),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim*4, num_classes))
         self.bbox_embed = None
         self.verb_query_embed = nn.Embedding(num_verb_queries, hidden_dim)
         self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
@@ -44,7 +47,10 @@ class DETR(nn.Module):
         self.aux_loss = aux_loss
 
         self.avg_pool = nn.AvgPool2d(22)
-        self.verb_classifier = nn.Linear(hidden_dim, 504)
+        self.verb_classifier = nn.Sequential(nn.Linear(hidden_dim*2, hidden_dim*4),
+                                             nn.ReLU(True),
+                                             nn.Dropout(0.1),
+                                             nn.Linear(hidden_dim*4, 504))
 
     def forward(self, samples: NestedTensor, targets):
         """ The forward expects a NestedTensor, which consists of:
