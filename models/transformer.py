@@ -54,8 +54,8 @@ class Transformer(nn.Module):
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
         return memory
 
-    def forward_decoder(self, tgt, memory, mask, query_embed, pos_embed):
-        hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
+    def forward_decoder(self, tgt, memory, tgt_mask, mask, query_embed, pos_embed):
+        hs = self.decoder(tgt, memory, tgt_mask=tgt_mask, memory_key_padding_mask=mask,
                           pos=pos_embed, query_pos=query_embed)
         return hs
 

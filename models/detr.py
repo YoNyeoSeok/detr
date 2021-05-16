@@ -23,7 +23,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_verb_embed, num_role_queries, select_verb_role_queries, vidx_ridx):
+    def __init__(self, backbone, transformer, num_classes, num_verb_embed, num_role_queries, select_verb_role_queries, vidx_ridx, role_adj_mat):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -39,6 +39,7 @@ class DETR(nn.Module):
         self.num_role_queries = num_role_queries
         self.select_verb_role_queries = select_verb_role_queries
         self.vidx_ridx = vidx_ridx
+        self.role_adj_mat = role_adj_mat
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
@@ -56,14 +57,18 @@ class DETR(nn.Module):
     def select_verb_role_query_embed(self, batch_verb):
         if not self.select_verb_role_queries and self.num_verb_embed == 0:
             query_embed = self.role_embed.weight.unsqueeze(1).repeat(1, len(batch_verb), 1)
+            attn_mask = self.role_adj_mat
         else:
             query_embed = []
+            attn_mask = []
             for verb in batch_verb:
                 roles = self.vidx_ridx[verb]
                 if self.select_verb_role_queries:
                     selected_role_query_embed = self.role_embed.weight[roles]
+                    attn_mask += [torch.ones((len(roles), len(roles)))]
                 else:
                     selected_role_query_embed = self.role_embed.weight
+                    attn_mask += [self.role_adj_mat]
                 if self.num_verb_embed == 1:
                     selected_verb_query_embed = self.verb_embed.weight[0]
                 elif self.num_verb_embed == 504:
@@ -74,7 +79,7 @@ class DETR(nn.Module):
                     selected_role_query_embed, selected_verb_query_embed], axis=1)
                 query_embed.append(selected_query_embed)
 
-        return query_embed
+        return query_embed, attn_mask
 
     def forward_verb(self, src, mask, pos_embed):
         bs, c, h, w = src.shape
@@ -90,18 +95,18 @@ class DETR(nn.Module):
         return outputs_verb, memory
 
     def forward_role_noun(self, verbs, memory, mask, pos_embed):
-        query_embed = self.select_verb_role_query_embed(verbs)
+        query_embed, attn_mask = self.select_verb_role_query_embed(verbs)
 
         if not self.select_verb_role_queries and self.num_verb_embed == 0:
             tgt = torch.zeros_like(query_embed)
-            hs = self.transformer.forward_decoder(tgt, memory, mask, query_embed, pos_embed)
+            hs = self.transformer.forward_decoder(tgt, memory, attn_mask.to(tgt.device), mask, query_embed, pos_embed)
         else:
             hs = []
             for i, (sliced_mask, sliced_query_embed) in enumerate(zip(mask, query_embed)):
                 tgt = torch.zeros_like(sliced_query_embed)
                 # sliced_hs: num_layers, 190 or len(slized_query_embed), 1, hidden_dim
                 sliced_hs = self.transformer.forward_decoder(
-                    tgt[:, None], memory[:, i:i + 1], sliced_mask[None], sliced_query_embed[:, None], pos_embed[:, i:i + 1])
+                    tgt[:, None], memory[:, i:i + 1], attn_mask[i].to(tgt.device), sliced_mask[None], sliced_query_embed[:, None], pos_embed[:, i:i + 1])
                 # padded_hs: num_layers, 190 or 6, 1, hidden_dim
                 if not self.select_verb_role_queries:
                     padded_hs = sliced_hs
@@ -496,6 +501,7 @@ def build(args):
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
         vidx_ridx = args.vidx_ridx
+        role_adj_mat = torch.tensor(args.role_adj_mat) if args.use_role_adj_attn_mask else None
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -510,6 +516,7 @@ def build(args):
         num_role_queries=args.num_role_queries,
         select_verb_role_queries=args.select_verb_role_queries,
         vidx_ridx=vidx_ridx,
+        role_adj_mat=role_adj_mat,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
