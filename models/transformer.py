@@ -44,7 +44,6 @@ class Transformer(nn.Module):
         self.semi_decoder_r_v = TransformerDecoder(semi_decoder_layer, 1, decoder_norm,
                                             return_intermediate=return_intermediate_dec)
 
-
         self._reset_parameters()
 
         self.d_model = d_model

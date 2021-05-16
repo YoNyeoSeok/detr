@@ -411,7 +411,7 @@ def build(args):
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    weight_dict = {'loss_vce': args.verb_loss_coef}
+    weight_dict = {'loss_nce': args.noun_loss_coef, 'loss_vce': args.verb_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
