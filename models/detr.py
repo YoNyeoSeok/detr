@@ -394,7 +394,7 @@ def build(args):
         num_classes = 250
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
-        assert args.num_roles == 190  # 190 or 504+190
+        assert args.num_role_queries == 190  # 190 or 504+190
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -405,14 +405,13 @@ def build(args):
         backbone,
         transformer,
         num_classes=num_classes,
-        num_verb_queries=args.num_verbs,
-        num_role_queries=args.num_roles,
+        num_verb_queries=args.num_verb_queries,
+        num_role_queries=args.num_role_queries,
         aux_loss=args.aux_loss,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    weight_dict = {'loss_nce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_vce'] = args.loss_ratio
+    weight_dict = {'loss_vce': args.verb_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
