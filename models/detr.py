@@ -440,7 +440,7 @@ class SWiGCriterion(nn.Module):
 
         stat = {'loss_vce': verb_loss, 'loss_nce': noun_loss,
                 'verb_acc_top1': verb_acc[0], 'verb_acc_top5': verb_acc[1],
-                'noun_acc_gt': noun_acc_gt.sum(0).mean(), 'noun_acc_all_gt': noun_acc_gt.sum(0).bool().float().mean(),
+                'noun_acc_gt': noun_acc_gt.sum(0).mean(), 'noun_acc_all_gt': (noun_acc_gt.sum(0)==1).float().mean(),
                 'class_error': torch.tensor(0.).to(device)}
 
         if pred_logits_topk != []:
@@ -460,8 +460,8 @@ class SWiGCriterion(nn.Module):
                 batch_noun_acc_topk.append(torch.stack(batch_noun_acc))
             noun_acc_topk = torch.stack(batch_noun_acc_topk)
             stat.update({
-                'noun_acc_top1': noun_acc_topk[0].mean(), 'noun_acc_all_top1': noun_acc_topk[0].bool().float().mean(),
-                'noun_acc_top5': noun_acc_topk.sum(0).mean(), 'noun_acc_all_top1': noun_acc_topk.sum(0).bool().float().mean(), })
+                'noun_acc_top1': noun_acc_topk[0].mean(), 'noun_acc_all_top1': (noun_acc_topk[0]==1).float().mean(),
+                'noun_acc_top5': noun_acc_topk.sum(0).mean(), 'noun_acc_all_top1': (noun_acc_topk.sum(0)==1).float().mean(), })
         stat.update({'mean_acc': torch.stack([v for k, v in stat.items() if 'acc' in k]).mean()})
         return stat
 
