@@ -400,6 +400,7 @@ class SWiGCriterion(nn.Module):
         assert 'pred_verb' in outputs
         pred_logits_per_verb = outputs['pred_logits']
         pred_verb = outputs['pred_verb']
+        device = pred_verb.device
 
         gt_verbs = torch.stack([t['verbs'] for t in targets])
         verb_loss = self.loss_function_for_verb(pred_verb, gt_verbs)
@@ -423,7 +424,7 @@ class SWiGCriterion(nn.Module):
                         role_noun_loss.append(self.loss_function(role_pred, role_targ[:, n]))
                     batch_noun_loss.append(sum(role_noun_loss))
                 else:
-                    batch_noun_acc += [torch.tensor(0., device=v.device)]
+                    batch_noun_acc += [torch.tensor(0., device=device)]
             batch_noun_acc_per_verb.append(torch.stack(batch_noun_acc))
         if batch_noun_loss:
             noun_loss = torch.stack(batch_noun_loss).mean()
@@ -435,7 +436,7 @@ class SWiGCriterion(nn.Module):
                 'verb_acc_top1': verb_acc[0], 'verb_acc_top5': verb_acc[1],
                 'noun_acc_top1': noun_acc[0].mean(), 'noun_acc_all_top1': noun_acc[0].bool().float().mean(),
                 'noun_acc_top5': noun_acc.sum(0).mean(), 'noun_acc_all_top1': noun_acc.sum(0).bool().float().mean(),
-                'class_error': torch.tensor(0.)}
+                'class_error': torch.tensor(0.).to(device)}
 
 
 class PostProcess(nn.Module):
