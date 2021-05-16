@@ -2,6 +2,8 @@
 """
 DETR model and criterion classes.
 """
+from typing import Union
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -21,7 +23,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_verb_embed, num_role_queries, select_verb_role_queries):
+    def __init__(self, backbone, transformer, num_classes, num_verb_embed, num_role_queries, select_verb_role_queries, vidx_ridx):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -36,6 +38,7 @@ class DETR(nn.Module):
         self.num_verb_embed = num_verb_embed
         self.num_role_queries = num_role_queries
         self.select_verb_role_queries = select_verb_role_queries
+        self.vidx_ridx = vidx_ridx
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
@@ -47,15 +50,16 @@ class DETR(nn.Module):
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
 
-        self.avg_pool = nn.AdaptiveAvgPool2d((1,1))
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.verb_classifier = nn.Linear(hidden_dim, 504)
 
-    def select_verb_role_query_embed(self, batch_verb, batch_roles):
+    def select_verb_role_query_embed(self, batch_verb):
         if not self.select_verb_role_queries and self.num_verb_embed == 0:
             query_embed = self.role_embed.weight.unsqueeze(1).repeat(1, len(batch_verb), 1)
         else:
             query_embed = []
-            for verb, roles in zip(batch_verb, batch_roles):
+            for verb in batch_verb:
+                roles = self.vidx_ridx[verb]
                 if self.select_verb_role_queries:
                     selected_role_query_embed = self.role_embed.weight[roles]
                 else:
@@ -69,18 +73,25 @@ class DETR(nn.Module):
                 selected_query_embed = torch.cat([
                     selected_role_query_embed, selected_verb_query_embed], axis=1)
                 query_embed.append(selected_query_embed)
+
         return query_embed
 
-    def preprocess(self, mask, pos_embed):
-        mask = mask.flatten(1)
-        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
-        return mask, pos_embed
+    def forward_verb(self, src, mask, pos_embed):
+        bs, c, h, w = src.shape
+        src = src.flatten(2).permute(2, 0, 1)
 
-    def forward_encoder(self, src, mask, pos_embed):
         memory = self.transformer.forward_encoder(src, mask, pos_embed)
-        return memory
-    
-    def forward_decoder(self, memory, mask, query_embed, pos_embed):
+        mem = memory.permute(1, 2, 0).view(bs, c, h, w)
+
+        # verb predict
+        outputs_verb = self.avg_pool(mem).squeeze(dim=2).squeeze(dim=2)
+        outputs_verb = self.verb_classifier(outputs_verb)
+
+        return outputs_verb, memory
+
+    def forward_role_noun(self, verbs, memory, mask, pos_embed):
+        query_embed = self.select_verb_role_query_embed(verbs)
+
         if not self.select_verb_role_queries and self.num_verb_embed == 0:
             tgt = torch.zeros_like(query_embed)
             hs = self.transformer.forward_decoder(tgt, memory, mask, query_embed, pos_embed)
@@ -90,7 +101,7 @@ class DETR(nn.Module):
                 tgt = torch.zeros_like(sliced_query_embed)
                 # sliced_hs: num_layers, 190 or len(slized_query_embed), 1, hidden_dim
                 sliced_hs = self.transformer.forward_decoder(
-                    tgt[:, None], memory[:, i:i+1], sliced_mask[None], sliced_query_embed[:, None], pos_embed[:, i:i+1])
+                    tgt[:, None], memory[:, i:i + 1], sliced_mask[None], sliced_query_embed[:, None], pos_embed[:, i:i + 1])
                 # padded_hs: num_layers, 190 or 6, 1, hidden_dim
                 if not self.select_verb_role_queries:
                     padded_hs = sliced_hs
@@ -98,14 +109,18 @@ class DETR(nn.Module):
                     padded_hs = F.pad(sliced_hs, (0, 0, 0, 0, 0, 6 - len(sliced_query_embed)), mode='constant', value=0)
                 hs.append(padded_hs)
             hs = torch.cat(hs, axis=2)
-        return hs
 
-    def forward(self, samples: NestedTensor, targets):
+        outputs_class = self.class_embed(hs.transpose(1, 2))
+
+        return outputs_class
+
+    def forward(self, samples: NestedTensor, verbs: Union[int, torch.Tensor]):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
-               - verbs: batched gt verbs of sample images [batch_size x 1]
-               - roles: bathced roles according to gt verbs of sample iamges [batch_size x (max role:6)]
+            and a verbs, which is one of:
+               - verbs (int): Use top k verb pred
+               - verbs (Tensor): a tensor of shape [batch_size x K], predict for K verbs
 
             It returns a dict with the following elements:
                - "pred_logits": the classification logits (including no-object) for all queries.
@@ -123,34 +138,26 @@ class DETR(nn.Module):
         features, pos = self.backbone(samples)
 
         src, mask = features[-1].decompose()
+        pos_embed = pos[-1]
         assert mask is not None
 
         # preprocess
-        mask, pos_embed = self.preprocess(mask, pos[-1])
-        src = self.input_proj(src)
-        bs, c, h, w = src.shape
-        src = src.flatten(2).permute(2, 0, 1)
-        
+        mask = mask.flatten(1)
+        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
+
         # encoder + verb classification
-        memory = self.forward_encoder(src, mask, pos_embed)
+        src = self.input_proj(src)
+        outputs_verb, memory = self.forward_verb(src, mask, pos_embed)
+        # decoder + role noun classification
+        if isinstance(verbs, int):
+            verbs = outputs_verb.topk(verbs)[1]
 
-        # decoder
-        query_embed = self.select_verb_role_query_embed(
-            [t['verbs'] for t in targets],
-            [t['roles'] for t in targets])
-        hs = self.forward_decoder(memory, mask, query_embed, pos_embed)
+        outputs_class_per_verb = []
+        for batch_verb in verbs.transpose(0, 1):
+            outputs_class = self.forward_role_noun(batch_verb, memory, mask, pos_embed)
+            outputs_class_per_verb.append((batch_verb, outputs_class[-1]))
 
-        # post process
-        hs, mem = self.transformer.postprocess(hs, memory, (bs, c, h, w))
-
-        # verb predict
-        outputs_verb = self.avg_pool(mem).squeeze(dim=2).squeeze(dim=2)
-        outputs_verb = self.verb_classifier(outputs_verb)
-
-        outputs_class = self.class_embed(hs)
-        # outputs_pred_class = self.class_embed(hs_pred)
-        out = {'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb}
-        # out = {'pred_verb_logits': outputs_pred_class[-1], 'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb}
+        out = {'pred_logits': outputs_class_per_verb, 'pred_verb': outputs_verb}
         return out
 
     @torch.jit.unused
@@ -382,36 +389,48 @@ class SWiGCriterion(nn.Module):
              outputs: dict of tensors, see the output specification of the model for the format
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
+             retuction: 
         """
         assert 'pred_logits' in outputs
         assert 'pred_verb' in outputs
-        pred_logits = outputs['pred_logits']
+        pred_logits_per_verb = outputs['pred_logits']
         pred_verb = outputs['pred_verb']
 
         gt_verbs = torch.stack([t['verbs'] for t in targets])
         verb_loss = self.loss_function_for_verb(pred_verb, gt_verbs)
-        verb_acc = accuracy(pred_verb, gt_verbs)[0]
+        verb_acc = accuracy(pred_verb, gt_verbs, topk=(1, 5))
 
         batch_noun_loss = []
-        batch_noun_acc = []
-        for p, t in zip(pred_logits, targets):
-            roles = t['roles']
-            num_roles = len(roles)
-            role_targ = t['labels'][:num_roles]
-            role_targ = role_targ.long().cuda()
-            role_pred = p[:num_roles] if self.select_verb_role_queries else p[roles]
+        batch_noun_acc_per_verb = []
+        for verbs, pred_logits in pred_logits_per_verb:
+            batch_noun_acc = []
+            for v, p, t in zip(verbs, pred_logits, targets):
+                if v == t['verbs']:
+                    roles = t['roles']
+                    num_roles = len(roles)
+                    role_targ = t['labels'][:num_roles]
+                    role_targ = role_targ.long().cuda()
+                    role_pred = p[:num_roles] if self.select_verb_role_queries else p[roles]
+                    batch_noun_acc += accuracy_swig(role_pred, role_targ)
 
-            role_noun_loss = []
-            for n in range(3):
-                role_noun_loss.append(self.loss_function(role_pred, role_targ[:, n]))
-            batch_noun_loss.append(sum(role_noun_loss))
-            batch_noun_acc += accuracy_swig(role_pred, role_targ)
+                    role_noun_loss = []
+                    for n in range(3):
+                        role_noun_loss.append(self.loss_function(role_pred, role_targ[:, n]))
+                    batch_noun_loss.append(sum(role_noun_loss))
+                else:
+                    batch_noun_acc += [torch.tensor(0., device=v.device)]
+            batch_noun_acc_per_verb.append(torch.stack(batch_noun_acc))
+        if batch_noun_loss:
+            noun_loss = torch.stack(batch_noun_loss).mean()
+        else:
+            noun_loss = torch.tensor(0., requires_grad=True)
+        noun_acc = torch.stack(batch_noun_acc_per_verb)
 
-        noun_loss = torch.stack(batch_noun_loss).mean()
-        noun_acc = torch.stack(batch_noun_acc).mean()
-
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc,
-                'class_error': torch.tensor(0.).cuda()}
+        return {'loss_vce': verb_loss, 'loss_nce': noun_loss,
+                'verb_acc_top1': verb_acc[0], 'verb_acc_top5': verb_acc[1],
+                'noun_acc_top1': noun_acc[0].mean(), 'noun_acc_all_top1': noun_acc[0].bool().float().mean(),
+                'noun_acc_top5': noun_acc.sum(0).mean(), 'noun_acc_all_top1': noun_acc.sum(0).bool().float().mean(),
+                'class_error': torch.tensor(0.)}
 
 
 class PostProcess(nn.Module):
@@ -476,6 +495,7 @@ def build(args):
         num_classes = 250
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
+        vidx_ridx = args.vidx_ridx
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -489,6 +509,7 @@ def build(args):
         num_verb_embed=args.num_verb_embed,
         num_role_queries=args.num_role_queries,
         select_verb_role_queries=args.select_verb_role_queries,
+        vidx_ridx=vidx_ridx,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
@@ -514,7 +535,8 @@ def build(args):
                                  eos_coef=args.eos_coef, losses=losses)
         criterion.to(device)
     else:
-        criterion = SWiGCriterion(num_classes, select_verb_role_queries=args.select_verb_role_queries, weight_dict=weight_dict)
+        criterion = SWiGCriterion(
+            num_classes, select_verb_role_queries=args.select_verb_role_queries, weight_dict=weight_dict)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
         postprocessors['segm'] = PostProcessSegm()

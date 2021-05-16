@@ -59,9 +59,6 @@ class Transformer(nn.Module):
                           pos=pos_embed, query_pos=query_embed)
         return hs
 
-    def postprocess(self, hs, memory, shape):
-        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(*shape)
-
     def forward(self, src, mask, query_embed, pos_embed):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
@@ -70,8 +67,8 @@ class Transformer(nn.Module):
         memory = self.forward_encoder(src, mask, pos_embed)
         tgt = torch.zeros_like(query_embed)
         hs = self.forward_decoder(tgt, memory, mask, query_embed, pos_embed)
-        hs, memory = self.postprocess(hs, memory, (bs, c, h, w))
-        return hs, memory
+
+        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
 
 
 class TransformerEncoder(nn.Module):
