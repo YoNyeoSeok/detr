@@ -67,6 +67,10 @@ class DETR(nn.Module):
                 else:
                     selected_role_query_embed = self.role_embed.weight
                     attn_mask += [self.role_adj_mat]
+                if self.num_verb_embed == 0:
+                    query_embed.append(selected_role_query_embed)
+                    continue
+
                 if self.num_verb_embed == 1:
                     selected_verb_query_embed = self.verb_embed.weight[0]
                 elif self.num_verb_embed == 504:
