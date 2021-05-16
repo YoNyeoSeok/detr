@@ -427,7 +427,7 @@ class SWiGCriterion(nn.Module):
                     batch_noun_loss.append(sum(role_noun_loss))
                 else:
                     batch_noun_acc += [torch.tensor(0., device=device)]
-        batch_noun_acc_gt.append(torch.stack(batch_noun_acc))
+            batch_noun_acc_gt.append(torch.stack(batch_noun_acc))
         if batch_noun_loss:
             noun_loss = torch.stack(batch_noun_loss).mean()
         else:
