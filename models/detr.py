@@ -458,7 +458,7 @@ class SWiGCriterion(nn.Module):
             stat.update({
                 'noun_acc_top1': noun_acc_topk[0].mean(), 'noun_acc_all_top1': noun_acc_topk[0].bool().float().mean(),
                 'noun_acc_top5': noun_acc_topk.sum(0).mean(), 'noun_acc_all_top1': noun_acc_topk.sum(0).bool().float().mean(), })
-
+        stat.update({'mean_acc': torch.stack([v for k, v in stat.items() if 'acc' in k]).mean()})
         return stat
 
 
