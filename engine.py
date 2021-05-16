@@ -179,7 +179,8 @@ def evaluate_swig(model, criterion, postprocessors, data_loader, device, output_
         samples = samples.to(device)
         targets = [{k: v.to(device) if type(v) is not str else v for k, v in t.items()} for t in targets]
 
-        outputs = model(samples, verbs=5)
+        verbs = torch.stack([t['verbs'][None] for t in targets])
+        outputs = model(samples, verbs, topk=5)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 

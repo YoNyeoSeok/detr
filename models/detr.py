@@ -2,8 +2,6 @@
 """
 DETR model and criterion classes.
 """
-from typing import Union
-
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -119,7 +117,7 @@ class DETR(nn.Module):
 
         return outputs_class
 
-    def forward(self, samples: NestedTensor, verbs: Union[int, torch.Tensor]):
+    def forward(self, samples: NestedTensor, verbs: torch.Tensor, topk=0):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -154,15 +152,17 @@ class DETR(nn.Module):
         src = self.input_proj(src)
         outputs_verb, memory = self.forward_verb(src, mask, pos_embed)
         # decoder + role noun classification
-        if isinstance(verbs, int):
-            verbs = outputs_verb.topk(verbs)[1]
 
-        outputs_class_per_verb = []
-        for batch_verb in verbs.transpose(0, 1):
-            outputs_class = self.forward_role_noun(batch_verb, memory, mask, pos_embed)
-            outputs_class_per_verb.append((batch_verb, outputs_class[-1]))
+        outputs_class_topk = []
+        if topk != 0:
+            for batch_verb in outputs_verb.topk(topk)[1].transpose(0, 1):
+                outputs_class = self.forward_role_noun(batch_verb, memory, mask, pos_embed)
+                outputs_class_topk.append((batch_verb, outputs_class[-1]))
+        outputs_class = []
+        if verbs is not None:
+            outputs_class.append((verbs, self.forward_role_noun(verbs, memory, mask, pos_embed)[-1]))
 
-        out = {'pred_logits': outputs_class_per_verb, 'pred_verb': outputs_verb}
+        out = {'pred_logits': outputs_class, 'pred_verb': outputs_verb, 'pred_logits_topk': outputs_class_topk}
         return out
 
     @torch.jit.unused
@@ -394,12 +394,14 @@ class SWiGCriterion(nn.Module):
              outputs: dict of tensors, see the output specification of the model for the format
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
-             retuction: 
         """
         assert 'pred_logits' in outputs
+        assert 'pred_logits_topk' in outputs
         assert 'pred_verb' in outputs
-        pred_logits_per_verb = outputs['pred_logits']
+        pred_logits_topk = outputs['pred_logits_topk']
+        pred_logits = outputs['pred_logits']
         pred_verb = outputs['pred_verb']
+        assert pred_logits != []
         device = pred_verb.device
 
         gt_verbs = torch.stack([t['verbs'] for t in targets])
@@ -407,8 +409,8 @@ class SWiGCriterion(nn.Module):
         verb_acc = accuracy(pred_verb, gt_verbs, topk=(1, 5))
 
         batch_noun_loss = []
-        batch_noun_acc_per_verb = []
-        for verbs, pred_logits in pred_logits_per_verb:
+        batch_noun_acc_gt = []
+        for verbs, pred_logits in pred_logits:
             batch_noun_acc = []
             for v, p, t in zip(verbs, pred_logits, targets):
                 if v == t['verbs']:
@@ -425,18 +427,39 @@ class SWiGCriterion(nn.Module):
                     batch_noun_loss.append(sum(role_noun_loss))
                 else:
                     batch_noun_acc += [torch.tensor(0., device=device)]
-            batch_noun_acc_per_verb.append(torch.stack(batch_noun_acc))
+        batch_noun_acc_gt.append(torch.stack(batch_noun_acc))
         if batch_noun_loss:
             noun_loss = torch.stack(batch_noun_loss).mean()
         else:
             noun_loss = torch.tensor(0., requires_grad=True)
-        noun_acc = torch.stack(batch_noun_acc_per_verb)
+        noun_acc_gt = torch.stack(batch_noun_acc_gt)
 
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss,
+        stat = {'loss_vce': verb_loss, 'loss_nce': noun_loss,
                 'verb_acc_top1': verb_acc[0], 'verb_acc_top5': verb_acc[1],
-                'noun_acc_top1': noun_acc[0].mean(), 'noun_acc_all_top1': noun_acc[0].bool().float().mean(),
-                'noun_acc_top5': noun_acc.sum(0).mean(), 'noun_acc_all_top1': noun_acc.sum(0).bool().float().mean(),
+                'noun_acc_gt': noun_acc_gt.sum(0).mean(), 'noun_acc_all_gt': noun_acc_gt.sum(0).bool().float().mean(),
                 'class_error': torch.tensor(0.).to(device)}
+
+        if pred_logits_topk != []:
+            batch_noun_acc_topk = []
+            for verbs, pred_logits in pred_logits_topk:
+                batch_noun_acc = []
+                for v, p, t in zip(verbs, pred_logits, targets):
+                    if v == t['verbs']:
+                        roles = t['roles']
+                        num_roles = len(roles)
+                        role_targ = t['labels'][:num_roles]
+                        role_targ = role_targ.long().cuda()
+                        role_pred = p[:num_roles] if self.select_verb_role_queries else p[roles]
+                        batch_noun_acc += accuracy_swig(role_pred, role_targ)
+                    else:
+                        batch_noun_acc += [torch.tensor(0., device=device)]
+                batch_noun_acc_topk.append(torch.stack(batch_noun_acc))
+            noun_acc_topk = torch.stack(batch_noun_acc_topk)
+            stat.update({
+                'noun_acc_top1': noun_acc_topk[0].mean(), 'noun_acc_all_top1': noun_acc_topk[0].bool().float().mean(),
+                'noun_acc_top5': noun_acc_topk.sum(0).mean(), 'noun_acc_all_top1': noun_acc_topk.sum(0).bool().float().mean(), })
+
+        return stat
 
 
 class PostProcess(nn.Module):
