@@ -19,7 +19,6 @@ from .position_encoding import build_position_encoding
 class FrozenBatchNorm2d(torch.nn.Module):
     """
     BatchNorm2d where the batch statistics and the affine parameters are fixed.
-
     Copy-paste from torchvision.misc.ops with added eps before rqsrt,
     without which any other models than torchvision.models.resnet[18,34,50,101]
     produce nans.
@@ -67,7 +66,7 @@ class BackboneBase(nn.Module):
                 return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
             else:
                 return_layers = {'layer4': "0"}
-        elif 'vgg16' == name_backbone:
+        elif 'vgg16' in name_backbone:
             for name, parameter in backbone.named_parameters():
                 if not train_backbone or 'features.0' not in name and 'features.2' not in name:
                     parameter.requires_grad_(False)
@@ -75,7 +74,7 @@ class BackboneBase(nn.Module):
                 assert False, "backbone {name_backbone} is not supported return intermediate layers"
             return_layers = {"features": "0"}
         else:
-            # TODO only vgg16 is supported
+            # TODO
             assert False, f"backbone {name_backbone} is not supported now"
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
         self.num_channels = num_channels
@@ -102,7 +101,7 @@ class Backbone(BackboneBase):
                 replace_stride_with_dilation=[False, False, dilation],
                 pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
             num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        elif 'vgg16' == name:
+        elif 'vgg16' in name:
             backbone = getattr(torchvision.models, name)(
                 pretrained=is_main_process())
             num_channels = 512

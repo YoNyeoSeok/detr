@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
+from torch.optim.lr_scheduler import LambdaLR
+import math
 
 import datasets
 import util.misc as utils
@@ -16,14 +18,13 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch, evaluate_swig
 from models import build_model
 
-
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=300, type=int)
+    parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
@@ -52,8 +53,12 @@ def get_args_parser():
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_queries', default=100, type=int,
-                        help="Number of query slots")
+    parser.add_argument('--num_verb_queries', type=int, choices=[1],
+                        help="Number of verb query slots")
+    parser.add_argument('--num_role_queries', type=int, choices=[190],
+                        help="Number of role query slots")
+    parser.add_argument('--use_role_adj_attn_mask', action='store_true',
+                        help="Use role adjacency matrix as decoder attention mask")
     parser.add_argument('--pre_norm', action='store_true')
 
     # * Segmentation
@@ -77,6 +82,8 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
+    parser.add_argument('--noun_loss_coef', default=1, type=float)
+    parser.add_argument('--verb_loss_coef', default=1, type=float)
 
     # dataset parameters
     parser.add_argument('--dataset_file', default='imsitu')

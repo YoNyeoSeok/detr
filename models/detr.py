@@ -21,35 +21,41 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
+    def __init__(self, backbone, dual_transformer, num_classes, num_verb_queries, num_role_queries, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
             transformer: torch module of the transformer architecture. See transformer.py
             num_classes: number of object classes
-            num_queries: number of object queries, ie detection slot. This is the maximal number of objects
+            num_roles: number of object queries, ie detection slot. This is the maximal number of objects
                          DETR can detect in a single image. For COCO, we recommend 100 queries.
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.num_queries = num_queries
-        self.transformer = transformer
-        hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.query_embed = nn.Embedding(num_queries, hidden_dim)
-        self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+        self.num_verb_queries = num_verb_queries
+        self.num_role_queries = num_role_queries
+        self.dual_transformer = dual_transformer
+        hidden_dim = dual_transformer.d_model
+        self.bbox_embed = None
+        self.verb_query_embed = nn.Embedding(num_verb_queries, hidden_dim)
+        self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-    def forward(self, samples: NestedTensor):
+        self.avg_pool = nn.AvgPool2d(7)
+        self.class_embed = nn.Linear(hidden_dim*2, num_classes)
+        self.verb_classifier = nn.Linear(hidden_dim, 504)
+
+    def forward(self, samples: NestedTensor, targets):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
+               - verbs: batched gt verbs of sample images [batch_size x 1]
+               - roles: bathced roles according to gt verbs of sample iamges [batch_size x (max role:6)]
 
             It returns a dict with the following elements:
                - "pred_logits": the classification logits (including no-object) for all queries.
-                                Shape= [batch_size x num_queries x (num_classes + 1)]
+                                Shape= [batch_size x num_roles x (num_classes + 1)]
                - "pred_boxes": The normalized boxes coordinates for all queries, represented as
                                (center_x, center_y, height, width). These values are normalized in [0, 1],
                                relative to the size of each individual image (disregarding possible padding).
@@ -57,19 +63,20 @@ class DETR(nn.Module):
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
+       
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.backbone(samples)
 
         src, mask = features[-1].decompose()
         assert mask is not None
-        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
+    
+        rhs, vhs, _, _ = self.dual_transformer(src, mask, self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
+        outputs_class = self.class_embed(rhs)
+        outputs_verb = self.verb_classifier(vhs)
 
-        outputs_class = self.class_embed(hs)
-        outputs_coord = self.bbox_embed(hs).sigmoid()
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+        out = {'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb[-1]}
+
         return out
 
     @torch.jit.unused
@@ -292,6 +299,7 @@ class SWiGCriterion(nn.Module):
         self.num_classes = num_classes
         self.weight_dict = weight_dict
         self.loss_function = LabelSmoothing(0.2)
+        self.loss_function_verb = LabelSmoothing(0.2)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -301,21 +309,34 @@ class SWiGCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         assert 'pred_logits' in outputs
+        pred_logits = outputs['pred_logits']
+        device = pred_logits.device
+
         batch_noun_loss = []
         batch_noun_acc = []
-        for b, t in enumerate(targets):
+        for p, t in zip(pred_logits, targets):
+            roles = t['roles']
+            labels = t['labels']
+                      
             role_noun_loss = []
             for n in range(3):
                 role_noun_loss.append(self.loss_function(
-                    outputs['pred_logits'][b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
+                    p[roles], labels[:len(roles), n].long()))
             batch_noun_loss.append(sum(role_noun_loss))
-            batch_noun_acc += accuracy_swig(outputs['pred_logits'][b, t['roles']],
-                                            t['labels'][:len(t['roles'])].long().cuda())
+            batch_noun_acc += accuracy_swig(
+                p[troles], labels[:len(roles)].long())
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
-        return {'loss_ce': noun_loss, 'noun_acc': noun_acc, 'class_error': torch.tensor(0).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
+        assert 'pred_verb' in outputs
+        verb_pred_logits = outputs['pred_verb'].squeeze(1)
+        gt_verbs = torch.stack([t['verbs'] for t in targets])
 
+        verb_loss = self.loss_function_verb(verb_pred_logits, gt_verbs)
+        verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
+
+        return {'loss_nce': noun_loss, 'noun_acc': noun_acc, 'loss_vce': verb_loss, 'verb_acc': verb_acc,
+                'class_error': torch.tensor(0.).to(device)}
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
@@ -379,23 +400,25 @@ def build(args):
         num_classes = 250
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
-        args.decoder_attn_mask = args.role_adj_mat
+        args.decoder_attn_mask = args.role_adj_mat if args.use_role_adj_attn_mask else None
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
+    args.num_channels = backbone.num_channels
 
-    transformer = build_transformer(args)
+    dual_transformer = build_transformer(args)
 
     model = DETR(
         backbone,
-        transformer,
+        dual_transformer,
         num_classes=num_classes,
-        num_queries=args.num_queries,
+        num_verb_queries=args.num_verb_queries,
+        num_role_queries=args.num_role_queries,
         aux_loss=args.aux_loss,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict = {'loss_nce': args.noun_loss_coef, 'loss_vce': args.verb_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
