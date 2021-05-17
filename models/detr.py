@@ -20,6 +20,7 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
+
     def __init__(self, backbone, dual_transformer, num_classes, num_verb_queries, num_role_queries, aux_loss=False):
         """ Initializes the model.
         Parameters:
@@ -308,27 +309,34 @@ class SWiGCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         assert 'pred_logits' in outputs
+        pred_logits = outputs['pred_logits']
+        device = pred_logits.device
+
         batch_noun_loss = []
         batch_noun_acc = []
-        for b, t in enumerate(targets):
+        for p, t in zip(pred_logits, targets):
+            roles = t['roles']
+            labels = t['labels']
+                      
             role_noun_loss = []
             for n in range(3):
                 role_noun_loss.append(self.loss_function(
-                    outputs['pred_logits'][b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
+                    p[roles], labels[:len(roles), n].long()))
             batch_noun_loss.append(sum(role_noun_loss))
-            batch_noun_acc += accuracy_swig(outputs['pred_logits'][b, t['roles']],
-                                            t['labels'][:len(t['roles'])].long().cuda())
+            batch_noun_acc += accuracy_swig(
+                p[troles], labels[:len(roles)].long())
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
-        # assert 'pred_logits' in outputs
+        assert 'pred_verb' in outputs
         verb_pred_logits = outputs['pred_verb'].squeeze(1)
         gt_verbs = torch.stack([t['verbs'] for t in targets])
+
         verb_loss = self.loss_function_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
 
         return {'loss_nce': noun_loss, 'noun_acc': noun_acc, 'loss_vce': verb_loss, 'verb_acc': verb_acc,
-                'class_error': torch.tensor(0.).cuda()}
+                'class_error': torch.tensor(0.).to(device)}
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
@@ -392,12 +400,13 @@ def build(args):
         num_classes = 250
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
-        assert args.num_role_queries == 190  # 190 or 504+190
+        args.decoder_attn_mask = args.role_adj_mat if args.use_role_adj_attn_mask else None
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
+    args.num_channels = backbone.num_channels
 
-    dual_transformer = build_transformer(backbone.num_channels, args)
+    dual_transformer = build_transformer(args)
 
     model = DETR(
         backbone,

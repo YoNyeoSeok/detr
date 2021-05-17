@@ -27,9 +27,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-        
-        outputs = model(samples, targets)
+        targets = [{k: v.to(device) if type(v) is not str else v for k, v in t.items()} for t in targets]
+
+        outputs = model(samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
@@ -175,7 +175,7 @@ def evaluate_swig(model, criterion, postprocessors, data_loader, device, output_
 
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        targets = [{k: v.to(device) if type(v) is not str else v for k, v in t.items()} for t in targets]
 
         outputs = model(samples, targets)
         loss_dict = criterion(outputs, targets)

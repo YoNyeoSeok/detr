@@ -19,29 +19,30 @@ class Transformer(nn.Module):
 
     def __init__(self, num_channels, d_model=512, nhead=8, num_encoder_layers=6,
                  num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
+                 encoder_attn_mask=None, decoder_attn_mask=None, 
                  activation="relu", normalize_before=False,
                  return_intermediate_dec=False):
         super().__init__()
 
         encoder_layer_v = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
+                                                  dropout, activation, normalize_before)
         encoder_layer_r = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
+                                                  dropout, activation, normalize_before)
         encoder_norm_v = nn.LayerNorm(d_model) if normalize_before else None
         encoder_norm_r = nn.LayerNorm(d_model) if normalize_before else None
         self.encoder_v = TransformerEncoder(encoder_layer_v, num_encoder_layers, encoder_norm_v)
         self.encoder_r = TransformerEncoder(encoder_layer_r, num_encoder_layers, encoder_norm_r)
 
         decoder_layer_v = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
+                                                  dropout, activation, normalize_before)
         decoder_layer_r = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
+                                                  dropout, activation, normalize_before)
         decoder_norm_v = nn.LayerNorm(d_model)
         decoder_norm_r = nn.LayerNorm(d_model)
         self.decoder_v = TransformerDecoder(decoder_layer_v, num_decoder_layers, decoder_norm_v,
-                                          return_intermediate=return_intermediate_dec)
+                                            return_intermediate=return_intermediate_dec)
         self.decoder_r = TransformerDecoder(decoder_layer_r, num_decoder_layers, decoder_norm_r,
-                                          return_intermediate=return_intermediate_dec)
+                                            return_intermediate=return_intermediate_dec)
 
         self._reset_parameters()
 
@@ -121,12 +122,13 @@ class TransformerEncoder(nn.Module):
 
 class TransformerDecoder(nn.Module):
 
-    def __init__(self, decoder_layer, num_layers, norm=None, return_intermediate=False):
+    def __init__(self, decoder_layer, num_layers, tgt_mask=None, norm=None, return_intermediate=False):
         super().__init__()
         self.layers = _get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
         self.return_intermediate = return_intermediate
+        self.tgt_mask = torch.tensor(tgt_mask)
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -136,6 +138,8 @@ class TransformerDecoder(nn.Module):
                 pos: Optional[Tensor] = None,
                 query_pos: Optional[Tensor] = None):
         output = tgt
+        if tgt_mask is None and self.tgt_mask is not None:
+            tgt_mask = self.tgt_mask.to(output.device)
 
         intermediate = []
 
@@ -309,15 +313,16 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-def build_transformer(num_channels, args):
+def build_transformer(args):
     return Transformer(
-        num_channels = num_channels,
+        num_channels = args.num_channels,
         d_model=args.hidden_dim,
         dropout=args.dropout,
         nhead=args.nheads,
         dim_feedforward=args.dim_feedforward,
         num_encoder_layers=args.enc_layers,
         num_decoder_layers=args.dec_layers,
+        decoder_attn_mask=args.decoder_attn_mask,
         normalize_before=args.pre_norm,
         return_intermediate_dec=True,
     )

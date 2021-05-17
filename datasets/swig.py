@@ -42,7 +42,6 @@ class CSVDataset(Dataset):
         self.class_list = class_list
         self.verb_path = verb_path
         self.role_path = role_path
-        self.verb_info = verb_info
         self.transform = transform
         self.is_visualizing = is_visualizing
         self.is_training = is_training
@@ -78,6 +77,15 @@ class CSVDataset(Dataset):
             self.image_to_image_idx[image_name] = i
             i += 1
 
+        # verb_role
+        self.verb_role = {verb: value['order'] for verb, value in verb_info.items()}
+        self.vidx_ridx = [[self.role_to_idx[role] for role in self.verb_role[verb]] for verb in self.idx_to_verb]
+
+        # role adjacency matrix
+        self.role_adj_matrix = np.ones((len(self.role_to_idx), len(self.role_to_idx))).astype(bool)
+        for ridx in self.vidx_ridx:
+            ridx = np.array(ridx)
+            self.role_adj_matrix[ridx[:, None], ridx] = np.zeros(len(ridx)).astype(bool)
 
     def load_classes(self, csv_reader):
         result = {}
@@ -151,8 +159,7 @@ class CSVDataset(Dataset):
         verb = verb.split('_')[0]
 
         verb_idx = self.verb_to_idx[verb]
-        verb_role = self.verb_info[verb]['order']
-        verb_role_idx = [self.role_to_idx[role] for role in verb_role]
+        verb_role_idx = self.vidx_ridx[verb_idx]
         sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx], 'verb_idx': verb_idx, 'verb_role_idx': verb_role_idx}
         if self.transform:
             sample = self.transform(sample)
@@ -235,7 +242,6 @@ class CSVDataset(Dataset):
                 class3 = 'Pad'
                 result[img_file].append(
                     {'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
-
         return result
 
 
@@ -259,10 +265,7 @@ class CSVDataset(Dataset):
 def collater(data):
     imgs = [s['img'] for s in data]
     annots = [s['annot'] for s in data]
-    shift_0 = [s['shift_0'] for s in data]
-    shift_1 = [s['shift_1'] for s in data]
 
-    scales = [s['scale'] for s in data]
     img_names = [s['img_name'] for s in data]
     verb_indices = [s['verb_idx'] for s in data]
     verb_indices = torch.tensor(verb_indices)
@@ -272,17 +275,9 @@ def collater(data):
     widths = [int(s.shape[0]) for s in imgs]
     heights = [int(s.shape[1]) for s in imgs]
 
-    batch_size = len(imgs)
-    max_width = 704
-    max_height = 704
-
-    padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
-
-    for i in range(batch_size):
-        img = imgs[i]
-        padded_imgs[i, shift_0[i]:shift_0[i]+img.shape[0], shift_1[i]:shift_1[i]+img.shape[1], :] = img
-
-
+    chw_imgs = []
+    for img in imgs:
+        chw_imgs.append(img.permute(2, 0, 1))
     max_num_annots = max(annot.shape[0] for annot in annots)
 
     if max_num_annots > 0:
@@ -297,9 +292,7 @@ def collater(data):
     else:
         annot_padded = torch.ones((len(annots), 1, 7)) * -1
 
-    padded_imgs = padded_imgs.permute(0, 3, 1, 2)
-
-    return (util.misc.nested_tensor_from_tensor_list(padded_imgs),
+    return (util.misc.nested_tensor_from_tensor_list(chw_imgs),
             [{'verbs': vi,
               'roles': vri,
               'boxes': util.box_ops.box_xyxy_to_cxcywh(annot[:, :4]) / torch.tensor([w, h, w, h], dtype=torch.float32), 
@@ -482,5 +475,9 @@ def build(image_set, args):
                          verb_info=verb_orders,
                          is_training=is_training,
                          transform=tfs)
+
+    # role adjancency matrix
+    args.role_adj_mat = dataset.role_adj_matrix
+    
     return dataset
 

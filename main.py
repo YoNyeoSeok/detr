@@ -53,10 +53,12 @@ def get_args_parser():
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_verb_queries', type=int,
+    parser.add_argument('--num_verb_queries', type=int, choices=[1],
                         help="Number of verb query slots")
-    parser.add_argument('--num_role_queries', type=int,
+    parser.add_argument('--num_role_queries', type=int, choices=[190],
                         help="Number of role query slots")
+    parser.add_argument('--use_role_adj_attn_mask', action='store_true',
+                        help="Use role adjacency matrix as decoder attention mask")
     parser.add_argument('--pre_norm', action='store_true')
 
     # * Segmentation
@@ -222,6 +224,7 @@ def main(args):
         return
 
     min_test_loss = np.inf
+    max_test_acc_noun = -np.inf
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -246,9 +249,10 @@ def main(args):
 
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
-            # extra checkpoint for every new min loss
-            if log_stats['test_loss'] < min_test_loss:
-                min_test_loss = log_stats['test_loss']
+            # extra checkpoint for every new min loss or new max acc
+            if log_stats['test_loss'] < min_test_loss or log_stats['test_noun_acc_unscaled'] > max_test_acc_noun:
+                min_test_loss = log_stats['test_loss'] if log_stats['test_loss'] < min_test_loss else min_test_loss
+                max_test_acc_noun = log_stats['test_loss'] if log_stats['test_noun_acc_unscaled'] > max_test_acc_noun else max_test_acc_noun
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({

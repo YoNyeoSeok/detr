@@ -7,6 +7,7 @@ from .coco import build as build_coco
 from .swig import build as build_swig
 from .imsitu import build as build_imsitu
 
+
 def get_coco_api_from_dataset(dataset):
     for _ in range(10):
         # if isinstance(dataset, torchvision.datasets.CocoDetection):
