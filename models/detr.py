@@ -20,7 +20,7 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, aux_loss=False):
+    def __init__(self, backbone, dual_transformer, num_classes, num_verb_queries, num_role_queries, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -33,18 +33,17 @@ class DETR(nn.Module):
         super().__init__()
         self.num_verb_queries = num_verb_queries
         self.num_role_queries = num_role_queries
-        self.transformer = transformer
-        hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim*2, num_classes)
+        self.dual_transformer = dual_transformer
+        hidden_dim = dual_transformer.d_model
         self.bbox_embed = None
         self.verb_query_embed = nn.Embedding(num_verb_queries, hidden_dim)
         self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
-        self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
 
         self.avg_pool = nn.AvgPool2d(7)
-        self.verb_classifier = nn.Linear(hidden_dim*2, 504)
+        self.class_embed = nn.Linear(hidden_dim*2, num_classes)
+        self.verb_classifier = nn.Linear(hidden_dim, 504)
 
     def forward(self, samples: NestedTensor, targets):
         """ The forward expects a NestedTensor, which consists of:
@@ -70,9 +69,8 @@ class DETR(nn.Module):
 
         src, mask = features[-1].decompose()
         assert mask is not None
-        
-        rhs, vhs, _ = self.transformer(self.input_proj(src), mask,
-                                self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
+    
+        rhs, vhs, _, _ = self.dual_transformer(src, mask, self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
         outputs_class = self.class_embed(rhs)
         outputs_verb = self.verb_classifier(vhs)
 
@@ -399,11 +397,11 @@ def build(args):
 
     backbone = build_backbone(args)
 
-    transformer = build_transformer(args)
+    dual_transformer = build_transformer(backbone.num_channels, args)
 
     model = DETR(
         backbone,
-        transformer,
+        dual_transformer,
         num_classes=num_classes,
         num_verb_queries=args.num_verb_queries,
         num_role_queries=args.num_role_queries,
