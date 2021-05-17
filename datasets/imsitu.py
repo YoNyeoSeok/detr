@@ -269,7 +269,7 @@ def collater(data):
             [{'verbs': vi,
               'roles': vri,
               'labels': annot,
-              'image_name':img_name}
+              'image_name': img_name}
              for vi, vri, annot, img_name in zip(verb_indices, verb_role_indices, annot_padded, img_names)])
 
 
@@ -329,5 +329,5 @@ def build(image_set, args):
 
     # role adjancency matrix
     args.role_adj_mat = dataset.role_adj_matrix
-    
+
     return dataset
