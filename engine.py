@@ -150,6 +150,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         stats['PQ_st'] = panoptic_res["Stuff"]
     return stats, coco_evaluator
 
+
 @torch.no_grad()
 def evaluate_swig(model, criterion, postprocessors, data_loader, device, output_dir):
     # TODO
@@ -177,7 +178,7 @@ def evaluate_swig(model, criterion, postprocessors, data_loader, device, output_
         samples = samples.to(device)
         targets = [{k: v.to(device) if type(v) is not str else v for k, v in t.items()} for t in targets]
 
-        outputs = model(samples, targets)
+        outputs = model(samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 

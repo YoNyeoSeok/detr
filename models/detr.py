@@ -45,10 +45,10 @@ class DETR(nn.Module):
         self.aux_loss = aux_loss
 
         self.avg_pool = nn.AvgPool2d(7)
-        self.class_embed = nn.Linear(hidden_dim*2, num_classes)
+        self.class_embed = nn.Linear(hidden_dim * 2, num_classes)
         self.verb_classifier = nn.Linear(hidden_dim, 504)
 
-    def forward(self, samples: NestedTensor, targets):
+    def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -65,15 +65,16 @@ class DETR(nn.Module):
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
-       
+
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.backbone(samples)
 
         src, mask = features[-1].decompose()
         assert mask is not None
-    
-        rhs, vhs, _, _ = self.dual_transformer(src, mask, self.verb_query_embed.weight, self.role_query_embed.weight, self.role_adj_mat, pos[-1])
+
+        rhs, vhs, _, _ = self.dual_transformer(src, mask, self.verb_query_embed.weight,
+                                               self.role_query_embed.weight, self.role_adj_mat, pos[-1])
         outputs_class = self.class_embed(rhs)
         outputs_verb = self.verb_classifier(vhs)
 
@@ -318,27 +319,52 @@ class SWiGCriterion(nn.Module):
         batch_noun_acc = []
         for p, t in zip(pred_logits, targets):
             roles = t['roles']
-            labels = t['labels']
-                      
+            num_roles = len(roles)
+            role_targ = t['labels'][:num_roles]
+            role_targ = role_targ.long().cuda()
+            role_pred = p[roles]
+            batch_noun_acc += accuracy_swig(role_pred, role_targ)
+
             role_noun_loss = []
             for n in range(3):
-                role_noun_loss.append(self.loss_function(
-                    p[roles], labels[:len(roles), n].long()))
+                role_noun_loss.append(self.loss_function(role_pred, role_targ[:, n]))
             batch_noun_loss.append(sum(role_noun_loss))
-            batch_noun_acc += accuracy_swig(
-                p[roles], labels[:len(roles)].long())
         noun_loss = torch.stack(batch_noun_loss).mean()
-        noun_acc = torch.stack(batch_noun_acc).mean()
+        noun_acc_gt = torch.stack(batch_noun_acc)
 
         assert 'pred_verb' in outputs
         verb_pred_logits = outputs['pred_verb'].squeeze(1)
         gt_verbs = torch.stack([t['verbs'] for t in targets])
 
         verb_loss = self.loss_function_verb(verb_pred_logits, gt_verbs)
-        verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
+        verb_acc = accuracy(verb_pred_logits, gt_verbs, topk=(1, 5))
 
-        return {'loss_nce': noun_loss, 'noun_acc': noun_acc, 'loss_vce': verb_loss, 'verb_acc': verb_acc,
+        batch_noun_acc_topk = []
+        for verbs in verb_pred_logits.topk(5)[1].transpose(0, 1):
+            batch_noun_acc = []
+            for v, p, t in zip(verbs, pred_logits, targets):
+                if v == t['verbs']:
+                    roles = t['roles']
+                    num_roles = len(roles)
+                    role_targ = t['labels'][:num_roles]
+                    role_targ = role_targ.long().cuda()
+                    role_pred = p[roles]
+                    batch_noun_acc += accuracy_swig(role_pred, role_targ)
+                else:
+                    batch_noun_acc += [torch.tensor(0., device=device)]
+            batch_noun_acc_topk.append(torch.stack(batch_noun_acc))
+        noun_acc_topk = torch.stack(batch_noun_acc_topk)
+
+        stat = {'loss_vce': verb_loss, 'loss_nce': noun_loss,
+                'noun_acc_top1': noun_acc_topk[0].mean(), 'noun_acc_all_top1': (noun_acc_topk[0] == 1).float().mean(),
+                'noun_acc_top5': noun_acc_topk.sum(0).mean(), 'noun_acc_all_top1': (noun_acc_topk.sum(0) == 1).float().mean(),
+                'verb_acc_top1': verb_acc[0], 'verb_acc_top5': verb_acc[1],
+                'noun_acc_gt': noun_acc_gt.mean(), 'noun_acc_all_gt': (noun_acc_gt == 1).float().mean(),
                 'class_error': torch.tensor(0.).to(device)}
+        stat.update({'mean_acc': torch.stack([v for k, v in stat.items() if 'acc' in k]).mean()})
+
+        return stat
+
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
