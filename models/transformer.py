@@ -58,21 +58,19 @@ class Transformer(nn.Module):
     def forward(self, src, mask, verb_query_embed, role_query_embed, pos_embed):
         verb_src = self.input_proj_v(src)
         role_src = self.input_proj_r(src)
-
-        # verb memory (by verb encoder)
         bs, c, h, w = verb_src.shape
-        # flatten NxCxHxW to HWxNxC
-        verb_src = verb_src.flatten(2).permute(2, 0, 1)
         pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
         mask = mask.flatten(1)
-        verb_memory = self.encoder(verb_src, src_key_padding_mask=mask, pos=pos_embed)
+
+        # verb memory (by verb encoder)
+        # flatten NxCxHxW to HWxNxC
+        verb_src = verb_src.flatten(2).permute(2, 0, 1)
+        verb_memory = self.encoder_v(verb_src, src_key_padding_mask=mask, pos=pos_embed)
 
         # role memory (by role encoder)
         # flatten NxCxHxW to HWxNxC
         role_src = role_src.flatten(2).permute(2, 0, 1)
-        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
-        mask = mask.flatten(1)
-        role_memory = self.encoder(role_src, src_key_padding_mask=mask, pos=pos_embed)
+        role_memory = self.encoder_r(role_src, src_key_padding_mask=mask, pos=pos_embed)
         
         verb_query_embed = verb_query_embed.unsqueeze(1).repeat(1, bs, 1)
         role_query_embed = role_query_embed.unsqueeze(1).repeat(1, bs, 1)
@@ -91,8 +89,8 @@ class Transformer(nn.Module):
                              pos=verb_pos, query_pos=verb_query_embed)
 
         # tile the output of verb decoder to the output of role decoder
-        
-        final_rhs = None
+        tiled_vhs =  torch.tile(vhs, [1, 190, 1, 1])
+        final_rhs = torch.cat([rhs, tiled_vhs], axis=-1)
 
         return final_rhs.transpose(1, 2), vhs.transpose(1, 2), verb_memory.permute(1, 2, 0).view(bs, c, h, w), role_memory.permute(1, 2, 0).view(bs, c, h, w)
 
