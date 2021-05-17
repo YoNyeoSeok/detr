@@ -32,13 +32,18 @@ class Transformer(nn.Module):
         self.encoder_v = TransformerEncoder(encoder_layer_v, num_encoder_layers, encoder_norm_v)
         self.encoder_r = TransformerEncoder(encoder_layer_r, num_encoder_layers, encoder_norm_r)
 
-        decoder_layer_v = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+        decoder_layer_ve = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        decoder_layer_vr = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
         decoder_layer_r = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
-        decoder_norm_v = nn.LayerNorm(d_model)
+        decoder_norm_ve = nn.LayerNorm(d_model)
+        decoder_norm_vr = nn.LayerNorm(d_model)
         decoder_norm_r = nn.LayerNorm(d_model)
-        self.decoder_v = TransformerDecoder(decoder_layer_v, num_decoder_layers, decoder_norm_v,
+        self.decoder_ve = TransformerDecoder(decoder_layer_ve, num_decoder_layers, decoder_norm_ve,
+                                          return_intermediate=return_intermediate_dec)
+        self.decoder_vr = TransformerDecoder(decoder_layer_vr, num_decoder_layers, decoder_norm_vr,
                                           return_intermediate=return_intermediate_dec)
         self.decoder_r = TransformerDecoder(decoder_layer_r, num_decoder_layers, decoder_norm_r,
                                           return_intermediate=return_intermediate_dec)
@@ -80,14 +85,18 @@ class Transformer(nn.Module):
         rhs = self.decoder_r(role_tgt, role_memory, memory_key_padding_mask=mask,
                            pos=pos_embed, query_pos=role_query_embed)
 
-        # verb decoder 
         verb_tgt = torch.zeros_like(verb_query_embed)
-        verb_pos = torch.cat([pos_embed, torch.zeros_like(rhs[-1])], axis=0)
-        verb_memory_w_rhs = torch.cat([verb_memory, rhs[-1]], axis=0)
-        verb_mask = torch.zeros((verb_memory_w_rhs.shape[1::-1]), dtype=mask.dtype, device=mask.device)
-        vhs = self.decoder_v(verb_tgt, verb_memory_w_rhs, memory_key_padding_mask=verb_mask,
-                             pos=verb_pos, query_pos=verb_query_embed)
+        # verb decoder (enc)
+        vehs_mask = torch.zeros((verb_memory.shape[1::-1]), dtype=mask.dtype, device=mask.device)
+        vehs = self.decoder_ve(verb_tgt, verb_memory, memory_key_padding_mask=vehs_mask,
+                             pos=pos_embed, query_pos=verb_query_embed)
 
+        # verb decoder (role)
+        vrhs_mask = torch.zeros((rhs[-1].shape[1::-1]), dtype=mask.dtype, device=mask.device)
+        vrhs = self.decoder_vr(verb_tgt, rhs[-1], memory_key_padding_mask=vrhs_mask,
+                             pos=torch.zeros_like(rhs[-1]), query_pos=verb_query_embed)
+        vhs = torch.cat([vehs, vrhs], axis=-1)
+        
         # tile the output of verb decoder to the output of role decoder
         tiled_vhs =  torch.tile(vhs, [1, 190, 1, 1])
         final_rhs = torch.cat([rhs, tiled_vhs], axis=-1)

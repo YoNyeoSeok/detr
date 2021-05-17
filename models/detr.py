@@ -42,8 +42,8 @@ class DETR(nn.Module):
         self.aux_loss = aux_loss
 
         self.avg_pool = nn.AvgPool2d(7)
-        self.class_embed = nn.Linear(hidden_dim*2, num_classes)
-        self.verb_classifier = nn.Linear(hidden_dim, 504)
+        self.class_embed = nn.Linear(hidden_dim*3, num_classes)
+        self.verb_classifier = nn.Linear(hidden_dim*2, 504)
 
     def forward(self, samples: NestedTensor, targets):
         """ The forward expects a NestedTensor, which consists of:
