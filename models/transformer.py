@@ -19,7 +19,6 @@ class Transformer(nn.Module):
 
     def __init__(self, num_channels, d_model=512, nhead=8, num_encoder_layers=6,
                  num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
-                 encoder_attn_mask=None, decoder_attn_mask=None, 
                  activation="relu", normalize_before=False,
                  return_intermediate_dec=False):
         super().__init__()
@@ -56,7 +55,7 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, verb_query_embed, role_query_embed, pos_embed):
+    def forward(self, src, mask, verb_query_embed, role_query_embed, role_tgt_mask, pos_embed):
         verb_src = self.input_proj_v(src)
         role_src = self.input_proj_r(src)
         bs, c, h, w = verb_src.shape
@@ -72,16 +71,16 @@ class Transformer(nn.Module):
         # flatten NxCxHxW to HWxNxC
         role_src = role_src.flatten(2).permute(2, 0, 1)
         role_memory = self.encoder_r(role_src, src_key_padding_mask=mask, pos=pos_embed)
-        
+
         verb_query_embed = verb_query_embed.unsqueeze(1).repeat(1, bs, 1)
         role_query_embed = role_query_embed.unsqueeze(1).repeat(1, bs, 1)
 
         # role decoder
         role_tgt = torch.zeros_like(role_query_embed)
-        rhs = self.decoder_r(role_tgt, role_memory, memory_key_padding_mask=mask,
-                           pos=pos_embed, query_pos=role_query_embed)
+        rhs = self.decoder_r(role_tgt, role_memory, tgt_mask=role_tgt_mask, memory_key_padding_mask=mask,
+                             pos=pos_embed, query_pos=role_query_embed)
 
-        # verb decoder 
+        # verb decoder
         verb_tgt = torch.zeros_like(verb_query_embed)
         verb_pos = torch.cat([pos_embed, torch.zeros_like(rhs[-1])], axis=0)
         verb_memory_w_rhs = torch.cat([verb_memory, rhs[-1]], axis=0)
@@ -90,7 +89,7 @@ class Transformer(nn.Module):
                              pos=verb_pos, query_pos=verb_query_embed)
 
         # tile the output of verb decoder to the output of role decoder
-        tiled_vhs =  torch.tile(vhs, [1, 190, 1, 1])
+        tiled_vhs = torch.tile(vhs, [1, 190, 1, 1])
         final_rhs = torch.cat([rhs, tiled_vhs], axis=-1)
 
         return final_rhs.transpose(1, 2), vhs.transpose(1, 2), verb_memory.permute(1, 2, 0).view(bs, c, h, w), role_memory.permute(1, 2, 0).view(bs, c, h, w)
@@ -122,13 +121,12 @@ class TransformerEncoder(nn.Module):
 
 class TransformerDecoder(nn.Module):
 
-    def __init__(self, decoder_layer, num_layers, tgt_mask=None, norm=None, return_intermediate=False):
+    def __init__(self, decoder_layer, num_layers, norm=None, return_intermediate=False):
         super().__init__()
         self.layers = _get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
         self.return_intermediate = return_intermediate
-        self.tgt_mask = torch.tensor(tgt_mask)
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -138,9 +136,6 @@ class TransformerDecoder(nn.Module):
                 pos: Optional[Tensor] = None,
                 query_pos: Optional[Tensor] = None):
         output = tgt
-        if tgt_mask is None and self.tgt_mask is not None:
-            tgt_mask = self.tgt_mask.to(output.device)
-
         intermediate = []
 
         for layer in self.layers:
@@ -258,7 +253,7 @@ class TransformerDecoderLayer(nn.Module):
                      query_pos: Optional[Tensor] = None):
         q = k = self.with_pos_embed(tgt, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
-                                key_padding_mask=tgt_key_padding_mask)[0]
+                              key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
         tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
@@ -282,7 +277,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt2 = self.norm1(tgt)
         q = k = self.with_pos_embed(tgt2, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
-                                key_padding_mask=tgt_key_padding_mask)[0]
+                              key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt2 = self.norm2(tgt)
         tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
@@ -315,14 +310,13 @@ def _get_clones(module, N):
 
 def build_transformer(args):
     return Transformer(
-        num_channels = args.num_channels,
+        num_channels=args.num_channels,
         d_model=args.hidden_dim,
         dropout=args.dropout,
         nhead=args.nheads,
         dim_feedforward=args.dim_feedforward,
         num_encoder_layers=args.enc_layers,
         num_decoder_layers=args.dec_layers,
-        decoder_attn_mask=args.decoder_attn_mask,
         normalize_before=args.pre_norm,
         return_intermediate_dec=True,
     )

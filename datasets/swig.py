@@ -473,6 +473,8 @@ def build(image_set, args):
                          is_training=is_training,
                          transform=tfs)
 
+    # vidx ridx
+    args.vidx_ridx = dataset.vidx_ridx
     # role adjancency matrix
     args.role_adj_mat = dataset.role_adj_matrix
 

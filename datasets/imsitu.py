@@ -327,6 +327,8 @@ def build(image_set, args):
                          verb_info=verb_orders,
                          transform=tfs)
 
+    # vidx ridx
+    args.vidx_ridx = dataset.vidx_ridx
     # role adjancency matrix
     args.role_adj_mat = dataset.role_adj_matrix
 

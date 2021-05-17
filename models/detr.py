@@ -21,7 +21,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
 
-    def __init__(self, backbone, dual_transformer, num_classes, num_verb_queries, num_role_queries, aux_loss=False):
+    def __init__(self, backbone, dual_transformer, num_classes, num_verb_queries, num_role_queries, vidx_ridx, role_adj_mat, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -34,6 +34,8 @@ class DETR(nn.Module):
         super().__init__()
         self.num_verb_queries = num_verb_queries
         self.num_role_queries = num_role_queries
+        self.vidx_ridx = vidx_ridx
+        self.role_adj_mat = role_adj_mat
         self.dual_transformer = dual_transformer
         hidden_dim = dual_transformer.d_model
         self.bbox_embed = None
@@ -71,7 +73,7 @@ class DETR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
     
-        rhs, vhs, _, _ = self.dual_transformer(src, mask, self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
+        rhs, vhs, _, _ = self.dual_transformer(src, mask, self.verb_query_embed.weight, self.role_query_embed.weight, self.role_adj_mat, pos[-1])
         outputs_class = self.class_embed(rhs)
         outputs_verb = self.verb_classifier(vhs)
 
@@ -324,7 +326,7 @@ class SWiGCriterion(nn.Module):
                     p[roles], labels[:len(roles), n].long()))
             batch_noun_loss.append(sum(role_noun_loss))
             batch_noun_acc += accuracy_swig(
-                p[troles], labels[:len(roles)].long())
+                p[roles], labels[:len(roles)].long())
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
@@ -400,7 +402,8 @@ def build(args):
         num_classes = 250
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
-        args.decoder_attn_mask = args.role_adj_mat if args.use_role_adj_attn_mask else None
+        vidx_ridx = args.vidx_ridx
+        role_adj_mat = torch.tensor(args.role_adj_mat) if args.use_role_adj_attn_mask else None
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -414,6 +417,8 @@ def build(args):
         num_classes=num_classes,
         num_verb_queries=args.num_verb_queries,
         num_role_queries=args.num_role_queries,
+        vidx_ridx=vidx_ridx,
+        role_adj_mat=role_adj_mat,
         aux_loss=args.aux_loss,
     )
     if args.masks:
