@@ -115,10 +115,19 @@ git checkout bottomup
 #     main.py --batch_size 16 --epochs 50 --backbone resnet50 --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 --remove_crop \
 #     --dist_url file://${PWD}/dist/${NAME}
 
-NAME="bottomup_keep_crop"
+# NAME="bottomup_keep_crop"
+# OPTIM="AdamW"
+# rm -f log/${NAME}.log dist/${NAME}
+# rm -rf log/${NAME}
+# CUDA_VISIBLE_DEVICES="2,3" python -m torch.distributed.launch --nproc_per_node=2 --use_env \
+#     main.py --batch_size 16 --epochs 50 --backbone resnet50 --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 \
+#     --dist_url file://${PWD}/dist/${NAME}
+
+# cluster 17 swig
+NAME="bottomup_swig"
 OPTIM="AdamW"
 rm -f log/${NAME}.log dist/${NAME}
 rm -rf log/${NAME}
 CUDA_VISIBLE_DEVICES="2,3" python -m torch.distributed.launch --nproc_per_node=2 --use_env \
-    main.py --batch_size 16 --epochs 50 --backbone resnet50 --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 \
+    main.py --batch_size 32 --dataset_file swig --image_dir images_512 --epochs 50 --backbone resnet50 --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 \
     --dist_url file://${PWD}/dist/${NAME}

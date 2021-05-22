@@ -39,9 +39,9 @@ class CSVDataset(Dataset):
         self.inference = inference
         self.inference_verbs = inference_verbs
         self.train_file = train_file
-        self.class_list = class_list
         self.verb_path = verb_path
         self.role_path = role_path
+        self.class_path = class_list
         self.transform = transform
         self.is_visualizing = is_visualizing
         self.is_training = is_training
@@ -50,17 +50,25 @@ class CSVDataset(Dataset):
             transforms.ColorJitter(hue=.05, saturation=.05, brightness=0.05),
             transforms.RandomGrayscale(p=0.3)])
 
-        with open(self.class_list, 'r') as file:
-            self.classes, self.idx_to_class = self.load_classes(csv.reader(file, delimiter=','))
+        with open(self.verb_path, 'r') as f:
+            self.verb_to_idx, self.idx_to_verb = self.load_verb(f)
+            self.num_verbs = len(self.verb_to_idx)
+        with open(self.role_path, 'r') as f:
+            self.role_to_idx, self.idx_to_role = self.load_role(f)
+            self.num_roles = len(self.role_to_idx)
+        with open(self.class_path, 'r') as file:
+            self.noun_to_idx, self.idx_to_noun = self.load_classes(csv.reader(file, delimiter=','))
+            self.num_nouns = len(self.noun_to_idx) - 1  # padding noun last
+            self.pad_noun = len(self.noun_to_idx) - 1
+
+        # verb_role
+        self.verb_role = {verb: value['order'] for verb, value in verb_info.items()}
+        self.vidx_ridx = [[self.role_to_idx[role] for role in self.verb_role[verb]] for verb in self.idx_to_verb]
 
         if not self.inference:
-            self.labels = {}
-            for key, value in self.classes.items():
-                self.labels[value] = key
-
             with open(self.train_file) as file:
                 SWiG_json = json.load(file)
-            self.image_data = self._read_annotations(SWiG_json, verb_info, self.classes)
+            self.image_data = self._read_annotations(SWiG_json, verb_info, self.noun_to_idx)
             self.image_names = list(self.image_data.keys())
         else:
             self.image_names = []
@@ -68,29 +76,22 @@ class CSVDataset(Dataset):
                 for line in f:
                     self.image_names.append(line.split('\n')[0])
 
-        with open(self.verb_path, 'r') as f:
-            self.verb_to_idx, self.idx_to_verb = self.load_verb(f)
-        with open(self.role_path, 'r') as f:
-            self.role_to_idx, self.idx_to_role = self.load_role(f)
-
         self.image_to_image_idx = {}
         i = 0
         for image_name in self.image_names:
             self.image_to_image_idx[image_name] = i
             i += 1
 
-        # verb_role
-        self.verb_role = {verb: value['order'] for verb, value in verb_info.items()}
-        self.vidx_ridx = [[self.role_to_idx[role] for role in self.verb_role[verb]] for verb in self.idx_to_verb]
-
         # verb role adjacency matrix
-        self.verb_role_adj_matrix = np.tile(np.identity(len(self.role_to_idx)), (len(self.verb_to_idx), 1, 1)).astype(bool)
-        for vidx, ridx in enumerate(self.vidx_ridx):
-            ridx = np.array(ridx)
-            self.verb_role_adj_matrix[vidx:vidx + 1, ridx[:, None], ridx] = np.ones(len(ridx)).astype(bool)
+        self.verb_role_adj_matrix = None
+        # np.tile(np.identity(self.num_roles), (self.num_verbs, 1, 1)).astype(bool)
+        # for vidx, ridx in enumerate(self.vidx_ridx):
+        #     ridx = np.array(ridx)
+        #     self.verb_role_adj_matrix[vidx:vidx + 1, ridx[:, None], ridx] = np.ones(len(ridx)).astype(bool)
 
         # role adjacency matrix
-        self.role_adj_matrix = self.verb_role_adj_matrix.any(0)
+        self.role_adj_matrix = None
+        # self.verb_role_adj_matrix.any(0)
 
     def load_classes(self, csv_reader):
         result = {}
@@ -146,7 +147,6 @@ class CSVDataset(Dataset):
         return len(self.image_names)
 
     def __getitem__(self, idx):
-
         img = self.load_image(idx)
         if self.inference:
             verb_idx = self.inference_verbs[self.image_names[idx]]
@@ -198,24 +198,22 @@ class CSVDataset(Dataset):
             annotation[0, 2] = a['x2']
             annotation[0, 3] = a['y2']
 
-            annotation[0, 4] = self.name_to_label(a['class1'])
-            annotation[0, 5] = self.name_to_label(a['class2'])
-            annotation[0, 6] = self.name_to_label(a['class3'])
+            annotation[0, 4] = self.noun_to_idx[a['class1']]
+            annotation[0, 5] = self.noun_to_idx[a['class2']]
+            annotation[0, 6] = self.noun_to_idx[a['class3']]
             annotations = np.append(annotations, annotation, axis=0)
 
         return annotations
 
     def _read_annotations(self, json, verb_orders, classes):
+        dummy_annot = [{'x1': -1, 'x2': -1, 'y1': -1, 'y2': -1, "class1": 'Pad', "class2": 'Pad', "class3": 'Pad'} for role in self.role_to_idx.keys()]
         result = {}
 
         for image in json:
-            total_anns = 0
             verb = json[image]['verb']
-            order = verb_orders[verb]['order']
             img_file = f"{self.img_folder}/" + image
-            result[img_file] = []
-            for role in order:
-                total_anns += 1
+            result[img_file] = dummy_annot.copy()
+            for role in self.verb_role[verb]:
                 [x1, y1, x2, y2] = json[image]['bb'][role]
                 class1 = json[image]['frames'][0][role]
                 class2 = json[image]['frames'][1][role]
@@ -232,30 +230,13 @@ class CSVDataset(Dataset):
                     class2 = 'oov'
                 if class3 not in classes:
                     class3 = 'oov'
-                result[img_file].append(
-                    {'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
 
-            while total_anns < 6:
-                total_anns += 1
-                [x1, y1, x2, y2] = [-1, -1, -1, -1]
-                class1 = 'Pad'
-                class2 = 'Pad'
-                class3 = 'Pad'
-                result[img_file].append(
-                    {'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
+                ridx = self.role_to_idx[role]
+                result[img_file][ridx] = {
+                    'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2,
+                    'class1': class1, 'class2': class2, 'class3': class3}
+
         return result
-
-    def name_to_label(self, name):
-        return self.classes[name]
-
-    def label_to_name(self, label):
-        return self.labels[label]
-
-    def num_classes(self):
-        return 1
-
-    def num_nouns(self):
-        return max(self.classes.values()) + 1
 
     def image_aspect_ratio(self, image_index):
         image = Image.open(self.image_names[image_index])
@@ -293,7 +274,7 @@ def collater(data):
         annot_padded = torch.ones((len(annots), 1, 7)) * -1
 
     return (util.misc.nested_tensor_from_tensor_list(chw_imgs),
-            [{'verbs': vi,
+            [{'verb': vi,
               'roles': vri,
               'boxes': util.box_ops.box_xyxy_to_cxcywh(annot[:, :4]) / torch.tensor([w, h, w, h], dtype=torch.float32),
               'labels': annot[:, -3:]}
@@ -441,7 +422,7 @@ class AspectRatioBasedSampler(Sampler):
 
 def build(image_set, args):
     root = Path(args.swig_path)
-    img_folder = root / "images_512"
+    img_folder = root / args.image_dir
 
     PATHS = {
         "train": root / "SWiG_jsons" / "train.json",
@@ -477,5 +458,10 @@ def build(image_set, args):
                          transform=tfs)
 
     args.vr_adj_mat = dataset.verb_role_adj_matrix
+    args.vr_adj_mat = dataset.verb_role_adj_matrix
+    args.num_verbs = dataset.num_verbs
+    args.num_roles = dataset.num_roles
+    args.num_nouns = dataset.num_nouns
+    args.pad_noun = dataset.pad_noun
 
     return dataset

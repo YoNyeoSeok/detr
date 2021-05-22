@@ -442,3 +442,47 @@ def masked_any(input, mask, dim):
 
 def masked_all(input, mask, dim):
     return (input / mask).nansum(dim).eq(mask.sum(dim))
+
+
+@torch.no_grad()
+def accuracy(output, target, topk=(1,)):
+    """Computes the precision@k for the specified values of k"""
+    if target.numel() == 0:
+        return [torch.zeros([], device=output.device)]
+    maxk = max(topk)
+    batch_size = target.size(0)
+
+    _, pred = output.topk(maxk, 1, True, True)
+    pred = pred.t()
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].reshape(-1).float().sum(0)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
+
+@torch.no_grad()
+def accuracy_swig(output, target, topk=(1,)):
+    """Computes the precision@k for the specified values of k"""
+    if target.numel() == 0:
+        return [torch.zeros([], device=output.device)]
+    maxk = max(topk)
+    batch_size = target.size(0)
+
+    _, pred = output.topk(maxk, 1, True, True)
+    # b x maxk -> b x maxk x target_num
+    pred_tile = pred.unsqueeze(2).tile(1, 1, target.shape[1])
+    # b x target_num -> b x maxk x target_num
+    target_tile = target.unsqueeze(1).tile(1, pred.shape[1], 1)
+    # b x maxk x target_num
+    correct_tile = pred_tile.eq(target_tile)
+    # b x maxk x target_num -> b x maxk -> maxk x b
+    correct = correct_tile.any(2).t()
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].reshape(-1).float().sum(0)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res

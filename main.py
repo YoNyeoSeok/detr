@@ -10,7 +10,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 
-from datasets.imsitu import collater
 import util.misc as utils
 from datasets import build_dataset
 from engine import evaluate_swig, train_one_epoch
@@ -67,6 +66,7 @@ def get_args_parser():
     # dataset parameters
     parser.add_argument('--dataset_file', default='imsitu')
     parser.add_argument('--imsitu_path', type=str, default="imSitu")
+    parser.add_argument('--swig_path', type=str, default="SWiG")
     parser.add_argument('--image_dir', type=str, default="images")
     parser.add_argument('--remove_crop', action='store_true')
 
@@ -127,7 +127,7 @@ def main(args):
     if args.optimizer == 'Adam':
         optimizer = torch.optim.Adam(param_dicts, lr=args.lr)
     elif args.optimizer == 'AdamW':
-        optimizer = torch.optim.AdamW(param_dicts, lr=args.lr)
+        optimizer = torch.optim.AdamW(param_dicts, lr=args.lr, weight_decay=1e-4)
     elif args.optimizer == 'Adamax':
         optimizer = torch.optim.Adamax(param_dicts, lr=args.lr)
     elif args.optimizer == 'SGD':
@@ -147,14 +147,25 @@ def main(args):
     if args.remove_crop:
         from datasets.swig import AspectRatioBasedSampler
         # time too long
+        print("Use Aspect Ration Based Sampler")
         batch_sampler_train = AspectRatioBasedSampler(dataset_train, batch_size=args.batch_size, drop_last=True)
     else:
         batch_sampler_train = torch.utils.data.BatchSampler(sampler_train, args.batch_size, drop_last=True)
     batch_sampler_val = torch.utils.data.BatchSampler(sampler_val, args.batch_size, drop_last=False)
-    data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
-                                   collate_fn=collater, batch_sampler=batch_sampler_train)
-    data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
-                                 drop_last=False, collate_fn=collater, batch_sampler=batch_sampler_val)
+    if args.dataset_file == 'imsitu':
+        from datasets.imsitu import collater
+
+        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
+                                    collate_fn=collater, batch_sampler=batch_sampler_train)
+        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
+                                    drop_last=False, collate_fn=collater, batch_sampler=batch_sampler_val)
+    elif args.dataset_file == 'swig':
+        from datasets.swig import collater
+
+        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
+                                    collate_fn=collater, batch_sampler=batch_sampler_train)
+        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
+                                    drop_last=False, collate_fn=collater, batch_sampler=batch_sampler_val)
 
     if args.frozen_weights is not None:
         checkpoint = torch.load(args.frozen_weights, map_location='cpu')
