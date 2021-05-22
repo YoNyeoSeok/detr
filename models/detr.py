@@ -35,16 +35,14 @@ class DETR(nn.Module):
         self.num_role_queries = num_role_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim*2, num_classes)
+        self.verb_classifier = nn.Linear(hidden_dim, 504)
+        self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = None
-        self.verb_query_embed = nn.Embedding(num_verb_queries, hidden_dim)
-        self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
+        self.verb_role_query_embed = nn.Embedding(num_verb_queries+num_role_queries, hidden_dim)
+        #self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
-
-        self.avg_pool = nn.AvgPool2d(7)
-        self.verb_classifier = nn.Linear(hidden_dim*2, 504)
 
     def forward(self, samples: NestedTensor, targets):
         """ The forward expects a NestedTensor, which consists of:
@@ -71,8 +69,7 @@ class DETR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
         
-        rhs, vhs, _ = self.transformer(self.input_proj(src), mask,
-                                self.verb_query_embed.weight, self.role_query_embed.weight, pos[-1])
+        rhs, vhs, _ = self.transformer(self.input_proj(src), mask, self.verb_role_query_embed.weight, pos[-1])
         outputs_class = self.class_embed(rhs)
         outputs_verb = self.verb_classifier(vhs)
 
@@ -398,7 +395,6 @@ def build(args):
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
-
     transformer = build_transformer(args)
 
     model = DETR(
