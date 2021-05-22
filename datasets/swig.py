@@ -206,7 +206,8 @@ class CSVDataset(Dataset):
         return annotations
 
     def _read_annotations(self, json, verb_orders, classes):
-        dummy_annot = [{'x1': -1, 'x2': -1, 'y1': -1, 'y2': -1, "class1": 'Pad', "class2": 'Pad', "class3": 'Pad'} for role in self.role_to_idx.keys()]
+        dummy_annot = [{'x1': -1, 'x2': -1, 'y1': -1, 'y2': -1, "class1": 'Pad',
+                        "class2": 'Pad', "class3": 'Pad'} for role in self.role_to_idx.keys()]
         result = {}
 
         for image in json:
@@ -284,24 +285,26 @@ def collater(data):
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __init__(self, is_for_training):
+    def __init__(self, is_for_training, min_side, max_side):
         self.is_for_training = is_for_training
+        self.min_side = min_side
+        self.max_side = max_side
 
-    def __call__(self, sample, min_side=512, max_side=700):
+    def __call__(self, sample):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
         smallest_side = min(rows_orig, cols_orig)
 
         # rescale the image so the smallest side is min_side
-        scale = min_side / smallest_side
+        scale = self.min_side / smallest_side
 
         # check if the largest side is now greater than max_side, which can happen
         # when images have a large aspect ratio
         largest_side = max(rows_orig, cols_orig)
 
-        if largest_side * scale > max_side:
-            scale = max_side / largest_side
+        if largest_side * scale > self.max_side:
+            scale = self.max_side / largest_side
 
         if self.is_for_training:
             scale_factor = random.choice([1, 0.75, 0.5])
@@ -314,8 +317,8 @@ class Resizer(object):
         new_image = np.zeros((rows, cols, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        shift_1 = int((704 - cols) * .5)
-        shift_0 = int((704 - rows) * .5)
+        shift_1 = int((self.max_side + 4 - cols) * .5)
+        shift_0 = int((self.max_side + 4 - rows) * .5)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
 
@@ -423,6 +426,11 @@ class AspectRatioBasedSampler(Sampler):
 def build(image_set, args):
     root = Path(args.swig_path)
     img_folder = root / args.image_dir
+    resize = args.image_resize
+    if resize == 512:
+        max_side = 700
+    elif resize == 256:
+        max_side = 350
 
     PATHS = {
         "train": root / "SWiG_jsons" / "train.json",
@@ -442,9 +450,9 @@ def build(image_set, args):
     is_training = image_set == 'train'
 
     TRANSFORMS = {
-        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True)]),
-        "val": transforms.Compose([Normalizer(), Resizer(False)]),
-        "test": transforms.Compose([Normalizer(), Resizer(False)]),
+        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True, resize, max_side)]),
+        "val": transforms.Compose([Normalizer(), Resizer(False, resize, max_side)]),
+        "test": transforms.Compose([Normalizer(), Resizer(False, resize, max_side)]),
     }
     tfs = TRANSFORMS[image_set]
 

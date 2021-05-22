@@ -1,17 +1,16 @@
-# git checkout bottomup_div3
+git checkout bottomup_div3
 
 # cluster 17 screen res50 AdamW 0
 # train_bottomup
 # optimizer adamw
 # original image
-git checkout a0613d23d7a4a2ea7496c3ed8ad17aa1e1e3d57c
 NAME="bottomup_swig_div3"
 OPTIM="AdamW"
 rm -f log/${NAME}.log dist/${NAME}
 rm -rf log/${NAME}
 CUDA_VISIBLE_DEVICES="0,1" python -m torch.distributed.launch --nproc_per_node=2 --use_env \
-    main.py --batch_size 32 --dataset_file swig --image_dir images_512 --epochs 50 --backbone resnet50 \
-    --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 \
+    main.py --batch_size 32 --image_resize 512 --backbone resnet50 \
+    --epochs 50 --optimizer ${OPTIM} --dataset_file swig --image_dir images_512 --lr 1e-4 --lr_backbone 1e-5 \
     --dist_url file://${PWD}/dist/${NAME} \
     --output_dir log/${NAME} |\
     while IFS= read -r line; do printf '%s %s\n' "$(date +%m:%d-%T)" "$line"; done |\

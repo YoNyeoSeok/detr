@@ -69,6 +69,7 @@ def get_args_parser():
     parser.add_argument('--swig_path', type=str, default="SWiG")
     parser.add_argument('--image_dir', type=str, default="images")
     parser.add_argument('--remove_crop', action='store_true')
+    parser.add_argument('--image_resize', type=int, default=512, choices=[256, 512])
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
