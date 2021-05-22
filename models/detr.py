@@ -139,7 +139,7 @@ class imSituCriterion(nn.Module):
             role_noun_loss = []
             for n in range(3):
                 role_noun_loss.append(self.loss_function(role_pred, role_targ[:, n]))
-            batch_noun_loss.append(sum(role_noun_loss))
+            batch_noun_loss.append(sum(role_noun_loss) / 3)
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc)
 
