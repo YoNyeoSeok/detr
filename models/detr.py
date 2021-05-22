@@ -321,15 +321,15 @@ class SWiGCriterion(nn.Module):
             role_noun_loss = []
             for n in range(3):
                 role_noun_loss.append(self.loss_function(
-                    role_noun_pred_logits[b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
+                    role_noun_pred_logits[b, t['roles']], t['labels'][t['roles'], n].long().cuda()))
             batch_noun_loss.append(sum(role_noun_loss) / 3)
             batch_noun_acc += accuracy_swig(role_noun_pred_logits[b,
-                                            t['roles']], t['labels'][:len(t['roles'])].long().cuda())
+                                            t['roles']], t['labels'][t['roles']].long().cuda())
 
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
-        gt_verbs = torch.stack([t['verbs'] for t in targets])
+        gt_verbs = torch.stack([t['verb'] for t in targets])
         verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
 

@@ -88,6 +88,8 @@ def get_args_parser():
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--swig_path', type=str, default="SWiG")
     parser.add_argument('--remove_difficult', action='store_true')
+    parser.add_argument('--image_dir', type=str)
+    parser.add_argument('--image_resize', type=int, choices=[512, 256])
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -125,8 +127,6 @@ def main(args):
 
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
-    if args.dataset_file == "swig":
-        args.num_classes = dataset_train.num_nouns()
     model, criterion, postprocessors = build_model(args)
     model.to(device)
 

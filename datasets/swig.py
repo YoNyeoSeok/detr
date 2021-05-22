@@ -39,27 +39,36 @@ class CSVDataset(Dataset):
         self.inference = inference
         self.inference_verbs = inference_verbs
         self.train_file = train_file
-        self.class_list = class_list
         self.verb_path = verb_path
         self.role_path = role_path
-        self.verb_info = verb_info
+        self.class_path = class_list
         self.transform = transform
         self.is_visualizing = is_visualizing
         self.is_training = is_training
 
-        self.color_change = transforms.Compose([transforms.ColorJitter(hue=.05, saturation=.05, brightness=0.05), transforms.RandomGrayscale(p=0.3)])
+        self.color_change = transforms.Compose([
+            transforms.ColorJitter(hue=.05, saturation=.05, brightness=0.05),
+            transforms.RandomGrayscale(p=0.3)])
 
-        with open(self.class_list, 'r') as file:
-            self.classes, self.idx_to_class = self.load_classes(csv.reader(file, delimiter=','))
+        with open(self.verb_path, 'r') as f:
+            self.verb_to_idx, self.idx_to_verb = self.load_verb(f)
+            self.num_verbs = len(self.verb_to_idx)
+        with open(self.role_path, 'r') as f:
+            self.role_to_idx, self.idx_to_role = self.load_role(f)
+            self.num_roles = len(self.role_to_idx)
+        with open(self.class_path, 'r') as file:
+            self.noun_to_idx, self.idx_to_noun = self.load_classes(csv.reader(file, delimiter=','))
+            self.num_nouns = len(self.noun_to_idx) - 1  # padding noun last
+            self.pad_noun = len(self.noun_to_idx) - 1
+
+        # verb_role
+        self.verb_role = {verb: value['order'] for verb, value in verb_info.items()}
+        self.vidx_ridx = [[self.role_to_idx[role] for role in self.verb_role[verb]] for verb in self.idx_to_verb]
 
         if not self.inference:
-            self.labels = {}
-            for key, value in self.classes.items():
-                self.labels[value] = key
-
             with open(self.train_file) as file:
                 SWiG_json = json.load(file)
-            self.image_data = self._read_annotations(SWiG_json, verb_info, self.classes)
+            self.image_data = self._read_annotations(SWiG_json, verb_info, self.noun_to_idx)
             self.image_names = list(self.image_data.keys())
         else:
             self.image_names = []
@@ -67,17 +76,22 @@ class CSVDataset(Dataset):
                 for line in f:
                     self.image_names.append(line.split('\n')[0])
 
-        with open(self.verb_path, 'r') as f:
-            self.verb_to_idx, self.idx_to_verb = self.load_verb(f)
-        with open(self.role_path, 'r') as f:
-            self.role_to_idx, self.idx_to_role = self.load_role(f)
-
         self.image_to_image_idx = {}
         i = 0
         for image_name in self.image_names:
             self.image_to_image_idx[image_name] = i
             i += 1
 
+        # verb role adjacency matrix
+        self.verb_role_adj_matrix = None
+        # np.tile(np.identity(self.num_roles), (self.num_verbs, 1, 1)).astype(bool)
+        # for vidx, ridx in enumerate(self.vidx_ridx):
+        #     ridx = np.array(ridx)
+        #     self.verb_role_adj_matrix[vidx:vidx + 1, ridx[:, None], ridx] = np.ones(len(ridx)).astype(bool)
+
+        # role adjacency matrix
+        self.role_adj_matrix = None
+        # self.verb_role_adj_matrix.any(0)
 
     def load_classes(self, csv_reader):
         result = {}
@@ -120,7 +134,6 @@ class CSVDataset(Dataset):
     def make_dummy_annot(self):
         annotations = np.zeros((0, 7))
 
-
         # parse annotations
         for idx in range(6):
             annotation = np.zeros((1, 7))  # allow for 3 annotations
@@ -129,14 +142,11 @@ class CSVDataset(Dataset):
 
         return annotations
 
-
     def __len__(self):
-        #return 16
+        # return 16
         return len(self.image_names)
 
-
     def __getitem__(self, idx):
-
         img = self.load_image(idx)
         if self.inference:
             verb_idx = self.inference_verbs[self.image_names[idx]]
@@ -151,9 +161,9 @@ class CSVDataset(Dataset):
         verb = verb.split('_')[0]
 
         verb_idx = self.verb_to_idx[verb]
-        verb_role = self.verb_info[verb]['order']
-        verb_role_idx = [self.role_to_idx[role] for role in verb_role]
-        sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx], 'verb_idx': verb_idx, 'verb_role_idx': verb_role_idx}
+        verb_role_idx = self.vidx_ridx[verb_idx]
+        sample = {'img': img, 'annot': annot, 'img_name': self.image_names[idx],
+                  'verb_idx': verb_idx, 'verb_role_idx': verb_role_idx}
         if self.transform:
             sample = self.transform(sample)
         return sample
@@ -167,7 +177,6 @@ class CSVDataset(Dataset):
             im = np.array(self.color_change(im))
         else:
             im = np.array(im)
-
 
         return im.astype(np.float32) / 255.0
 
@@ -189,25 +198,23 @@ class CSVDataset(Dataset):
             annotation[0, 2] = a['x2']
             annotation[0, 3] = a['y2']
 
-            annotation[0, 4] = self.name_to_label(a['class1'])
-            annotation[0, 5] = self.name_to_label(a['class2'])
-            annotation[0, 6] = self.name_to_label(a['class3'])
+            annotation[0, 4] = self.noun_to_idx[a['class1']]
+            annotation[0, 5] = self.noun_to_idx[a['class2']]
+            annotation[0, 6] = self.noun_to_idx[a['class3']]
             annotations = np.append(annotations, annotation, axis=0)
 
         return annotations
 
-
     def _read_annotations(self, json, verb_orders, classes):
+        dummy_annot = [{'x1': -1, 'x2': -1, 'y1': -1, 'y2': -1, "class1": 'Pad',
+                        "class2": 'Pad', "class3": 'Pad'} for role in self.role_to_idx.keys()]
         result = {}
 
         for image in json:
-            total_anns = 0
             verb = json[image]['verb']
-            order = verb_orders[verb]['order']
             img_file = f"{self.img_folder}/" + image
-            result[img_file] = []
-            for role in order:
-                total_anns += 1
+            result[img_file] = dummy_annot.copy()
+            for role in self.verb_role[verb]:
                 [x1, y1, x2, y2] = json[image]['bb'][role]
                 class1 = json[image]['frames'][0][role]
                 class2 = json[image]['frames'][1][role]
@@ -224,32 +231,13 @@ class CSVDataset(Dataset):
                     class2 = 'oov'
                 if class3 not in classes:
                     class3 = 'oov'
-                result[img_file].append(
-                    {'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
 
-            while total_anns < 6:
-                total_anns += 1
-                [x1, y1, x2, y2] = [-1, -1, -1, -1]
-                class1 = 'Pad'
-                class2 = 'Pad'
-                class3 = 'Pad'
-                result[img_file].append(
-                    {'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2, 'class1': class1, 'class2': class2, 'class3': class3})
+                ridx = self.role_to_idx[role]
+                result[img_file][ridx] = {
+                    'x1': x1, 'x2': x2, 'y1': y1, 'y2': y2,
+                    'class1': class1, 'class2': class2, 'class3': class3}
 
         return result
-
-
-    def name_to_label(self, name):
-        return self.classes[name]
-
-    def label_to_name(self, label):
-        return self.labels[label]
-
-    def num_classes(self):
-        return 1
-
-    def num_nouns(self):
-        return max(self.classes.values()) + 1
 
     def image_aspect_ratio(self, image_index):
         image = Image.open(self.image_names[image_index])
@@ -259,10 +247,7 @@ class CSVDataset(Dataset):
 def collater(data):
     imgs = [s['img'] for s in data]
     annots = [s['annot'] for s in data]
-    shift_0 = [s['shift_0'] for s in data]
-    shift_1 = [s['shift_1'] for s in data]
 
-    scales = [s['scale'] for s in data]
     img_names = [s['img_name'] for s in data]
     verb_indices = [s['verb_idx'] for s in data]
     verb_indices = torch.tensor(verb_indices)
@@ -272,17 +257,9 @@ def collater(data):
     widths = [int(s.shape[0]) for s in imgs]
     heights = [int(s.shape[1]) for s in imgs]
 
-    batch_size = len(imgs)
-    max_width = 704
-    max_height = 704
-
-    padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
-
-    for i in range(batch_size):
-        img = imgs[i]
-        padded_imgs[i, shift_0[i]:shift_0[i]+img.shape[0], shift_1[i]:shift_1[i]+img.shape[1], :] = img
-
-
+    chw_imgs = []
+    for img in imgs:
+        chw_imgs.append(img.permute(2, 0, 1))
     max_num_annots = max(annot.shape[0] for annot in annots)
 
     if max_num_annots > 0:
@@ -297,42 +274,41 @@ def collater(data):
     else:
         annot_padded = torch.ones((len(annots), 1, 7)) * -1
 
-    padded_imgs = padded_imgs.permute(0, 3, 1, 2)
-
-    return (util.misc.nested_tensor_from_tensor_list(padded_imgs),
-            [{'verbs': vi,
+    return (util.misc.nested_tensor_from_tensor_list(chw_imgs),
+            [{'verb': vi,
               'roles': vri,
-              'boxes': util.box_ops.box_xyxy_to_cxcywh(annot[:, :4]) / torch.tensor([w, h, w, h], dtype=torch.float32), 
+              'boxes': util.box_ops.box_xyxy_to_cxcywh(annot[:, :4]) / torch.tensor([w, h, w, h], dtype=torch.float32),
               'labels': annot[:, -3:]}
-              for vi, vri, annot, w, h in zip(verb_indices, verb_role_indices, annot_padded, widths, heights)])
+             for vi, vri, annot, w, h in zip(verb_indices, verb_role_indices, annot_padded, widths, heights)])
 
 
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __init__(self, is_for_training):
+    def __init__(self, is_for_training, min_side, max_side):
         self.is_for_training = is_for_training
+        self.min_side = min_side
+        self.max_side = max_side
 
-
-    def __call__(self, sample, min_side=512, max_side=700):
+    def __call__(self, sample):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
         smallest_side = min(rows_orig, cols_orig)
 
         # rescale the image so the smallest side is min_side
-        scale = min_side / smallest_side
+        scale = self.min_side / smallest_side
 
         # check if the largest side is now greater than max_side, which can happen
         # when images have a large aspect ratio
         largest_side = max(rows_orig, cols_orig)
 
-        if largest_side * scale > max_side:
-            scale = max_side / largest_side
+        if largest_side * scale > self.max_side:
+            scale = self.max_side / largest_side
 
         if self.is_for_training:
             scale_factor = random.choice([1, 0.75, 0.5])
-            scale = scale*scale_factor
+            scale = scale * scale_factor
 
         # resize the image with the computed scale
         image = skimage.transform.resize(image, (int(round(rows_orig * scale)), int(round((cols_orig * scale)))))
@@ -341,8 +317,8 @@ class Resizer(object):
         new_image = np.zeros((rows, cols, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        shift_1 = int((704 - cols) * .5)
-        shift_0 = int((704 - rows) * .5)
+        shift_1 = int((self.max_side + 4 - cols) * .5)
+        shift_0 = int((self.max_side + 4 - rows) * .5)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
 
@@ -351,12 +327,12 @@ class Resizer(object):
         annots[:, 2][annots[:, 2] > 0] = annots[:, 2][annots[:, 2] > 0] + shift_1
         annots[:, 3][annots[:, 3] > 0] = annots[:, 3][annots[:, 3] > 0] + shift_0
 
-
         return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale, 'img_name': image_name, 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx'], 'shift_1': shift_1, 'shift_0': shift_0}
 
 
 class Augmenter(object):
     """Convert ndarrays in sample to Tensors."""
+
     def __call__(self, sample, flip_x=0.5):
 
         image, annots, img_name = sample['img'], sample['annot'], sample['img_name']
@@ -373,9 +349,11 @@ class Augmenter(object):
             annots[:, 0][annots[:, 0] > 0] = cols - x2[annots[:, 0] > 0]
             annots[:, 2][annots[:, 2] > 0] = cols - x_tmp[annots[:, 2] > 0]
 
-            sample = {'img': image, 'annot': annots, 'img_name': img_name, 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
+            sample = {'img': image, 'annot': annots, 'img_name': img_name,
+                      'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
 
-        sample = {'img': image, 'annot': annots, 'img_name': img_name, 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
+        sample = {'img': image, 'annot': annots, 'img_name': img_name,
+                  'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
 
         return sample
 
@@ -390,7 +368,6 @@ class Normalizer(object):
         image, annots = sample['img'], sample['annot']
 
         return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots, 'img_name': sample['img_name'], 'verb_idx': sample['verb_idx'], 'verb_role_idx': sample['verb_role_idx']}
-
 
 
 class UnNormalizer(object):
@@ -448,7 +425,12 @@ class AspectRatioBasedSampler(Sampler):
 
 def build(image_set, args):
     root = Path(args.swig_path)
-    img_folder = root / "images_512"
+    img_folder = root / args.image_dir
+    resize = args.image_resize
+    if resize == 512:
+        max_side = 700
+    elif resize == 256:
+        max_side = 350
 
     PATHS = {
         "train": root / "SWiG_jsons" / "train.json",
@@ -468,12 +450,12 @@ def build(image_set, args):
     is_training = image_set == 'train'
 
     TRANSFORMS = {
-        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True)]),
-        "val": transforms.Compose([Normalizer(), Resizer(False)]),
-        "test": transforms.Compose([Normalizer(), Resizer(False)]),
+        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True, resize, max_side)]),
+        "val": transforms.Compose([Normalizer(), Resizer(False, resize, max_side)]),
+        "test": transforms.Compose([Normalizer(), Resizer(False, resize, max_side)]),
     }
     tfs = TRANSFORMS[image_set]
-    
+
     dataset = CSVDataset(img_folder=str(img_folder),
                          train_file=ann_file,
                          class_list=classes_file,
@@ -482,5 +464,13 @@ def build(image_set, args):
                          verb_info=verb_orders,
                          is_training=is_training,
                          transform=tfs)
-    return dataset
 
+    args.vr_adj_mat = dataset.verb_role_adj_matrix
+    args.vr_adj_mat = dataset.verb_role_adj_matrix
+    # args.num_verbs = dataset.num_verbs
+    args.num_roles = dataset.num_roles
+    args.num_nouns = dataset.num_nouns
+    args.pad_noun = dataset.pad_noun
+    args.num_classes = args.num_nouns
+
+    return dataset
