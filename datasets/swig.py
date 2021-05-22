@@ -287,7 +287,7 @@ class Resizer(object):
     def __init__(self, is_for_training):
         self.is_for_training = is_for_training
 
-    def __call__(self, sample, min_side=256, max_side=350):
+    def __call__(self, sample, min_side=512, max_side=700):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
@@ -314,8 +314,8 @@ class Resizer(object):
         new_image = np.zeros((rows, cols, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        shift_1 = int((304 - cols) * .5)
-        shift_0 = int((304 - rows) * .5)
+        shift_1 = int((704 - cols) * .5)
+        shift_0 = int((704 - rows) * .5)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
 
