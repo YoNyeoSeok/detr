@@ -61,6 +61,21 @@ git checkout bottomup
 #     while IFS= read -r line; do printf '%s %s\n' "$(date +%m:%d-%T)" "$line"; done |\
 #     tee -a log/${NAME}.log
 
+# cluster 5 screen AdamW
+# train_bottomup
+# optimizer adamw
+# original image
+NAME="bottomup_adamw_vgg16_lr1e-4_lrb1e-5"
+OPTIM="AdamW"
+rm -f log/${NAME}.log dist/${NAME}
+rm -rf log/${NAME}
+
+CUDA_VISIBLE_DEVICES="0,1,2,3" python -m torch.distributed.launch --nproc_per_node=4 --use_env \
+    main.py --batch_size 4 --dataset_file swig --image_dir images_512 --epochs 50 --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 \
+    --output_dir log/${NAME} --dist_url file://${PWD}/dist/${NAME} |\
+    while IFS= read -r line; do printf '%s %s\n' "$(date +%m:%d-%T)" "$line"; done |\
+    tee -a log/${NAME}.log
+
 # cluster 141 screen RMSprop
 # train_bottomup
 # optimizer rmsprop
@@ -124,10 +139,10 @@ git checkout bottomup
 #     --dist_url file://${PWD}/dist/${NAME}
 
 # cluster 17 swig
-NAME="bottomup_swig"
-OPTIM="AdamW"
-rm -f log/${NAME}.log dist/${NAME}
-rm -rf log/${NAME}
-CUDA_VISIBLE_DEVICES="2,3" python -m torch.distributed.launch --nproc_per_node=2 --use_env \
-    main.py --batch_size 32 --dataset_file swig --image_dir images_512 --epochs 50 --backbone resnet50 --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 \
-    --dist_url file://${PWD}/dist/${NAME}
+# NAME="bottomup_swig"
+# OPTIM="AdamW"
+# rm -f log/${NAME}.log dist/${NAME}
+# rm -rf log/${NAME}
+# CUDA_VISIBLE_DEVICES="2,3" python -m torch.distributed.launch --nproc_per_node=2 --use_env \
+#     main.py --batch_size 32 --dataset_file swig --image_dir images_512 --epochs 50 --backbone resnet50 --optimizer ${OPTIM} --lr 1e-4 --lr_backbone 1e-5 \
+#     --dist_url file://${PWD}/dist/${NAME}
