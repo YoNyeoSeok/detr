@@ -22,6 +22,8 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
+    parser.add_argument('--optimizer', required=True, type=str,
+                        choices=["AdamW", "Adamax"])
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=50, type=int)
@@ -146,8 +148,12 @@ def main(args):
             "lr": args.lr_backbone,
         },
     ]
-    optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
-                                  weight_decay=args.weight_decay)
+    if args.optimizer == 'AdamW':
+        optimizer = torch.optim.AdamW(param_dicts, lr=args.lr, weight_decay=args.weight_decay)
+    elif args.optimizer == 'Adamax':
+        optimizer = torch.optim.Adamax(param_dicts, lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        assert False
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
     if args.distributed:
