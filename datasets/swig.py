@@ -273,8 +273,9 @@ def collater(data):
     heights = [int(s.shape[1]) for s in imgs]
 
     batch_size = len(imgs)
-    max_width = 704
-    max_height = 704
+    # TODO
+    max_width = 354
+    max_height = 354
 
     padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
 
@@ -345,8 +346,8 @@ class Resizer(object):
         new_image = np.zeros((rows, cols, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        shift_1 = int((704 - cols) * .5)
-        shift_0 = int((704 - rows) * .5)
+        shift_1 = int((self.max_side + 4 - cols) * .5)
+        shift_0 = int((self.max_side + 4 - rows) * .5)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
 
