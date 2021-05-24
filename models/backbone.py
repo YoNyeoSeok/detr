@@ -68,6 +68,9 @@ class BackboneBase(nn.Module):
             else:
                 return_layers = {'layer4': "0"}
         elif 'vgg16' in name_backbone:
+            for name, parameter in backbone.named_parameters():
+                if not train_backbone:
+                    parameter.requires_grad_(False)
             if return_interm_layers:
                 assert False, "backbone {name_backbone} is not supported return intermediate layers"
             return_layers = {"features": "0"}
