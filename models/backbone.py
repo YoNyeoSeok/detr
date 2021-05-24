@@ -19,6 +19,7 @@ from .position_encoding import build_position_encoding
 class FrozenBatchNorm2d(torch.nn.Module):
     """
     BatchNorm2d where the batch statistics and the affine parameters are fixed.
+
     Copy-paste from torchvision.misc.ops with added eps before rqsrt,
     without which any other models than torchvision.models.resnet[18,34,50,101]
     produce nans.
@@ -66,10 +67,7 @@ class BackboneBase(nn.Module):
                 return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
             else:
                 return_layers = {'layer4': "0"}
-        elif 'vgg16' == name_backbone or 'vgg16_bn' == name_backbone:
-            for name, parameter in backbone.named_parameters():
-                if not train_backbone or 'features.0' not in name and 'features.2' not in name:
-                    parameter.requires_grad_(False)
+        elif 'vgg16' in name_backbone:
             if return_interm_layers:
                 assert False, "backbone {name_backbone} is not supported return intermediate layers"
             return_layers = {"features": "0"}
@@ -101,11 +99,7 @@ class Backbone(BackboneBase):
                 replace_stride_with_dilation=[False, False, dilation],
                 pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
             num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        elif 'vgg16' == name:
-            backbone = getattr(torchvision.models, name)(
-                pretrained=is_main_process())
-            num_channels = 512
-        elif 'vgg16_bn' == name:
+        elif 'vgg16' in name:
             backbone = getattr(torchvision.models, name)(
                 pretrained=is_main_process())
             num_channels = 512
@@ -134,8 +128,7 @@ class Joiner(nn.Sequential):
 def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
-    return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+    backbone = Backbone(args.backbone, train_backbone, False, args.dilation)
     model = Joiner(backbone, position_embedding)
     model.num_channels = backbone.num_channels
     return model
