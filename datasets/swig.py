@@ -310,11 +310,15 @@ def collater(data):
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __init__(self, is_for_training):
+    def __init__(self, is_for_training, min_side, max_side):
         self.is_for_training = is_for_training
+        self.min_side = min_side
+        self.max_side = max_side
 
 
-    def __call__(self, sample, min_side=512, max_side=700):
+    def __call__(self, sample):
+        min_side = self.min_side
+        max_side = self.max_side
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
@@ -448,7 +452,12 @@ class AspectRatioBasedSampler(Sampler):
 
 def build(image_set, args):
     root = Path(args.swig_path)
-    img_folder = root / "images_512"
+    img_folder = root / args.image_folder
+    IMG_RESIZE = {
+        'small': [256, 350],
+        'big': [512, 700],
+    }
+    min_side, max_side = IMG_RESIZE[args.image_resize]
 
     PATHS = {
         "train": root / "SWiG_jsons" / "train.json",
@@ -468,9 +477,9 @@ def build(image_set, args):
     is_training = image_set == 'train'
 
     TRANSFORMS = {
-        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True)]),
-        "val": transforms.Compose([Normalizer(), Resizer(False)]),
-        "test": transforms.Compose([Normalizer(), Resizer(False)]),
+        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True, min_side=min_side, max_side=max_side)]),
+        "val": transforms.Compose([Normalizer(), Resizer(False, min_side=min_side, max_side=max_side)]),
+        "test": transforms.Compose([Normalizer(), Resizer(False, min_side=min_side, max_side=max_side)]),
     }
     tfs = TRANSFORMS[image_set]
     
