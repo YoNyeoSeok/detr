@@ -1,10 +1,9 @@
-git checkout new_v1role190_images_min512
-
+git checkout new_v1role190_images512_min512
 rm -rf dist
 mkdir dist
 
-# images 
-IMG_FOLDER="images"
+# images512
+IMG_FOLDER="images512"
 IMG_RESIZE="big"
 NAME="new_v1role190_fld${IMG_FOLDER}_resize${IMG_RESIZE}"
 
