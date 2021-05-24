@@ -274,8 +274,8 @@ def collater(data):
 
     batch_size = len(imgs)
     # TODO
-    max_width = 354
-    max_height = 354
+    max_width = 704
+    max_height = 704
 
     padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
 
