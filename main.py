@@ -86,8 +86,8 @@ def get_args_parser():
                         help="Relative classification weight of the no-object class")
     parser.add_argument('--verb_loss_smoothing', required=True, type=float)
     parser.add_argument('--noun_loss_smoothing', required=True, type=float)
-    parser.add_argument('--noun_loss_coef', default=1, type=float)
-    parser.add_argument('--verb_loss_coef', default=1, type=float)
+    parser.add_argument('--noun_loss_coef', required=True, type=float)
+    parser.add_argument('--verb_loss_coef', required=True, type=float)
 
     # dataset parameters
     parser.add_argument('--dataset_file', required=True)
