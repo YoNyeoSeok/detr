@@ -86,7 +86,7 @@ def get_args_parser():
     parser.add_argument('--verb_loss_coef', default=1, type=float)
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='imsitu')
+    parser.add_argument('--dataset_file', required=True)
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--imsitu_path', type=str, default="imSitu")
