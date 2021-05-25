@@ -351,7 +351,7 @@ class Resizer(object):
             scale = max_side / largest_side
 
         if self.is_for_training:
-            scale_factor = random.choice([1, 0.75, 0.5])
+            scale_factor = random.choice([1, 0.95, 0.9])
             scale = scale*scale_factor
 
         # resize the image with the computed scale
