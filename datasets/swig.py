@@ -47,7 +47,7 @@ class CSVDataset(Dataset):
         self.is_visualizing = is_visualizing
         self.is_training = is_training
 
-        self.color_change = transforms.Compose([transforms.ColorJitter(hue=.05, saturation=.05, brightness=0.05), transforms.RandomGrayscale(p=0.3)])
+        self.color_change = transforms.Compose([transforms.ColorJitter(hue=0.2, saturation=0.2, brightness=0.2), transforms.RandomGrayscale(p=0.3)])
 
         with open(self.class_list, 'r') as file:
             self.classes, self.idx_to_class = self.load_classes(csv.reader(file, delimiter=','))
