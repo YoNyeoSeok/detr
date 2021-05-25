@@ -62,6 +62,8 @@ def get_args_parser():
     parser.add_argument('--pre_norm', action='store_true')
     parser.add_argument('--use_role_adj_mask', action='store_true',
                         help="Mask not related roles")
+    parser.add_argument('--mask_verb_from_roles', action='store_true',
+                        help="Mask verb from roles (roles not use verb attention, roles don't see verb)")
 
     # * Segmentation
     parser.add_argument('--masks', action='store_true',

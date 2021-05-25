@@ -46,6 +46,7 @@ class Transformer(nn.Module):
 
     def forward(self, src, mask, verb_role_query_embed, role_tgt_mask, pos_embed,
                 use_role_adj_mask,
+                mask_verb_from_roles,
                 ):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
@@ -59,8 +60,12 @@ class Transformer(nn.Module):
 
         verb_role_tgt = torch.zeros_like(verb_role_query_embed)
 
-        # role can see verb
-        verb_tgt_mask = torch.tensor(np.zeros((190, 1)).astype(bool)).to(device)
+        if mask_verb_from_roles:
+            # role cannot see verb
+            verb_tgt_mask = torch.tensor(np.ones((190, 1)).astype(bool)).to(device)
+        else:
+            # role can see verb
+            verb_tgt_mask = torch.tensor(np.zeros((190, 1)).astype(bool)).to(device)
 
         # verb can see roles
         verb_tgt_mask_2 = torch.tensor(np.zeros((1,191)).astype(bool)).to(device)
