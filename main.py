@@ -60,6 +60,8 @@ def get_args_parser():
     parser.add_argument('--num_role_queries', type=int,
                         help="Number of role query slots")
     parser.add_argument('--pre_norm', action='store_true')
+    parser.add_argument('--use_role_adj_mask', action='store_true',
+                        help="Mask not related roles")
 
     # * Segmentation
     parser.add_argument('--masks', action='store_true',
