@@ -57,8 +57,8 @@ class Transformer(nn.Module):
 
         verb_role_tgt = torch.zeros_like(verb_role_query_embed)
 
-        # role cannot see verb
-        verb_tgt_mask = torch.tensor(np.ones((190, 1)).astype(bool)).to(device)
+        # role can see verb
+        verb_tgt_mask = torch.tensor(np.zeros((190, 1)).astype(bool)).to(device)
 
         # verb can see roles
         verb_tgt_mask_2 = torch.tensor(np.zeros((1,191)).astype(bool)).to(device)
