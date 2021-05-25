@@ -67,8 +67,8 @@ class BackboneBase(nn.Module):
             else:
                 return_layers = {'layer4': "0"}
         elif 'vgg16' == name_backbone or 'vgg16_bn' == name_backbone:
-            for name, parameter in backbone.named_parameters():
-                if not train_backbone or 'features.0' not in name and 'features.2' not in name:
+            if not train_backbone:
+                for name, parameter in backbone.named_parameters():
                     parameter.requires_grad_(False)
             if return_interm_layers:
                 assert False, "backbone {name_backbone} is not supported return intermediate layers"
@@ -101,11 +101,7 @@ class Backbone(BackboneBase):
                 replace_stride_with_dilation=[False, False, dilation],
                 pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
             num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        elif 'vgg16' == name:
-            backbone = getattr(torchvision.models, name)(
-                pretrained=is_main_process())
-            num_channels = 512
-        elif 'vgg16_bn' == name:
+        elif 'vgg16' == name or 'vgg16_bn' == name:
             backbone = getattr(torchvision.models, name)(
                 pretrained=is_main_process())
             num_channels = 512
