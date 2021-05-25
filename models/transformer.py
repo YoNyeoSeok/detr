@@ -72,7 +72,7 @@ class Transformer(nn.Module):
             # verb cannot see verb, roles
             verb_tgt_mask_2 = torch.tensor(np.ones((1,191)).astype(bool)).to(device)
             # verb can see itself
-            verb_tgt_mask_2[0] = False
+            verb_tgt_mask_2[0, 0] = False
         else:
             # verb can see roles
             verb_tgt_mask_2 = torch.tensor(np.zeros((1,191)).astype(bool)).to(device)
