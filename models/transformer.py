@@ -13,6 +13,7 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
+import numpy as np
 
 
 class Transformer(nn.Module):
@@ -43,18 +44,32 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, verb_role_query_embed, pos_embed):
+    def forward(self, src, mask, verb_role_query_embed, role_tgt_mask, pos_embed):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
         pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
         verb_role_query_embed = verb_role_query_embed.unsqueeze(1).repeat(1, bs, 1)
         mask = mask.flatten(1)
+        device = src.device
 
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
 
         verb_role_tgt = torch.zeros_like(verb_role_query_embed)
-        vrhs = self.decoder(verb_role_tgt, memory, memory_key_padding_mask=mask,
+
+        # role cannot see verb
+        verb_tgt_mask = torch.tensor(np.ones((190, 1)).astype(bool)).to(device)
+
+        # verb can see roles
+        verb_tgt_mask_2 = torch.tensor(np.zeros((1,191)).astype(bool)).to(device)
+
+        # 190x191
+        verb_role_tgt_mask = torch.cat([verb_tgt_mask, role_tgt_mask], dim=1)
+
+        # 191x191
+        verb_role_tgt_mask_2 = torch.cat([verb_tgt_mask_2, verb_role_tgt_mask], dim=0)
+        
+        vrhs = self.decoder(verb_role_tgt, memory, tgt_mask = verb_role_tgt_mask_2, memory_key_padding_mask=mask,
                            pos=pos_embed, query_pos=verb_role_query_embed)
 
         vhs, rhs = torch.split(vrhs, [1, 190], dim=1)

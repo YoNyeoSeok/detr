@@ -78,6 +78,26 @@ class CSVDataset(Dataset):
             self.image_to_image_idx[image_name] = i
             i += 1
 
+        # verb_role
+        self.verb_role = {verb: value['order'] for verb, value in verb_info.items()}
+        
+        # for each verb, the indices of roles in the frame.
+        self.vidx_ridx = [[self.role_to_idx[role] for role in self.verb_role[verb]] for verb in self.idx_to_verb]
+
+        # role adjacency matrix
+        self.role_adj_matrix = np.ones((len(self.role_to_idx), len(self.role_to_idx))).astype(bool)
+        
+        # for roles in the same frame, the value is false.
+        # if two roles do not appear together, then the value between them is true.
+        
+        # digonal is false (role need to consider itself)
+        for i in range(len(self.role_to_idx)):
+            self.role_adj_matrix[i, i] = False
+            
+        for ridx in self.vidx_ridx:
+            ridx = np.array(ridx)
+            self.role_adj_matrix[ridx[:, None], ridx] = np.zeros(len(ridx)).astype(bool)
+
 
     def load_classes(self, csv_reader):
         result = {}
@@ -482,5 +502,10 @@ def build(image_set, args):
                          verb_info=verb_orders,
                          is_training=is_training,
                          transform=tfs)
+    
+    # vidx ridx
+    args.vidx_ridx = dataset.vidx_ridx
+    args.role_adj_mat = dataset.role_adj_matrix
+
     return dataset
 
