@@ -21,7 +21,7 @@ from .transformer import build_transformer
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
     def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, role_adj_mat, 
-                 use_role_adj_mask, mask_verb_from_roles, aux_loss=False):
+                 use_role_adj_mask, mask_verb_from_roles, mask_roles_from_verb, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -43,6 +43,7 @@ class DETR(nn.Module):
         self.role_adj_mat = role_adj_mat
         self.use_role_adj_mask = use_role_adj_mask
         self.mask_verb_from_roles = mask_verb_from_roles
+        self.mask_roles_from_verb = mask_roles_from_verb
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -75,6 +76,7 @@ class DETR(nn.Module):
         rhs, vhs, _ = self.transformer(self.input_proj(src), mask, self.verb_role_query_embed.weight, self.role_adj_mat, pos[-1],
                                        use_role_adj_mask=self.use_role_adj_mask,
                                        mask_verb_from_roles=self.mask_verb_from_roles,
+                                       mask_roles_from_verb=self.mask_roles_from_verb,
                                        )
         outputs_class = self.class_embed(rhs)
         outputs_verb = self.verb_classifier(vhs)
@@ -402,6 +404,7 @@ def build(args):
         role_adj_mat = torch.tensor(args.role_adj_mat).to(device)
         use_role_adj_mask = args.use_role_adj_mask
         mask_verb_from_roles = args.mask_verb_from_roles
+        mask_roles_from_verb = args.mask_roles_from_verb
         assert args.num_role_queries == 190  # 190 or 504+190
 
     backbone = build_backbone(args)
@@ -416,6 +419,7 @@ def build(args):
         role_adj_mat=role_adj_mat,
         use_role_adj_mask=use_role_adj_mask,
         mask_verb_from_roles=mask_verb_from_roles,
+        mask_roles_from_verb=mask_roles_from_verb,
         aux_loss=args.aux_loss,
     )
     if args.masks:
