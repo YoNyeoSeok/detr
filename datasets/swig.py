@@ -47,7 +47,7 @@ class CSVDataset(Dataset):
         self.is_visualizing = is_visualizing
         self.is_training = is_training
 
-        self.color_change = transforms.Compose([transforms.ColorJitter(hue=.05, saturation=.05, brightness=0.05), transforms.RandomGrayscale(p=0.3)])
+        self.color_change = transforms.Compose([transforms.ColorJitter(hue=0.2, saturation=0.2, brightness=0.2), transforms.RandomGrayscale(p=0.3)])
 
         with open(self.class_list, 'r') as file:
             self.classes, self.idx_to_class = self.load_classes(csv.reader(file, delimiter=','))
@@ -77,6 +77,26 @@ class CSVDataset(Dataset):
         for image_name in self.image_names:
             self.image_to_image_idx[image_name] = i
             i += 1
+
+        # verb_role
+        self.verb_role = {verb: value['order'] for verb, value in verb_info.items()}
+        
+        # for each verb, the indices of roles in the frame.
+        self.vidx_ridx = [[self.role_to_idx[role] for role in self.verb_role[verb]] for verb in self.idx_to_verb]
+
+        # role adjacency matrix
+        self.role_adj_matrix = np.ones((len(self.role_to_idx), len(self.role_to_idx))).astype(bool)
+        
+        # for roles in the same frame, the value is false.
+        # if two roles do not appear together, then the value between them is true.
+        
+        # digonal is false (role need to consider itself)
+        for i in range(len(self.role_to_idx)):
+            self.role_adj_matrix[i, i] = False
+
+        for ridx in self.vidx_ridx:
+            ridx = np.array(ridx)
+            self.role_adj_matrix[ridx[:, None], ridx] = np.zeros(len(ridx)).astype(bool)
 
 
     def load_classes(self, csv_reader):
@@ -273,8 +293,8 @@ def collater(data):
     heights = [int(s.shape[1]) for s in imgs]
 
     batch_size = len(imgs)
-    max_width = 704
-    max_height = 704
+    max_width = 354
+    max_height = 354
 
     padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
 
@@ -314,7 +334,7 @@ class Resizer(object):
         self.is_for_training = is_for_training
 
 
-    def __call__(self, sample, min_side=512, max_side=700):
+    def __call__(self, sample, min_side=256, max_side=350):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
@@ -331,7 +351,7 @@ class Resizer(object):
             scale = max_side / largest_side
 
         if self.is_for_training:
-            scale_factor = random.choice([1, 0.75, 0.5])
+            scale_factor = random.choice([1, 0.95, 0.9])
             scale = scale*scale_factor
 
         # resize the image with the computed scale
@@ -341,8 +361,8 @@ class Resizer(object):
         new_image = np.zeros((rows, cols, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        shift_1 = int((704 - cols) * .5)
-        shift_0 = int((704 - rows) * .5)
+        shift_1 = int((354 - cols) * .5)
+        shift_0 = int((354 - rows) * .5)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
 
@@ -482,5 +502,10 @@ def build(image_set, args):
                          verb_info=verb_orders,
                          is_training=is_training,
                          transform=tfs)
+    
+    # vidx ridx
+    args.vidx_ridx = dataset.vidx_ridx
+    args.role_adj_mat = dataset.role_adj_matrix
+
     return dataset
 

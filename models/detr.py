@@ -20,7 +20,7 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_roles, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, role_adj_mat, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -31,18 +31,18 @@ class DETR(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.num_roles = num_roles
+        self.num_verb_queries = num_verb_queries
+        self.num_role_queries = num_role_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
+        self.verb_classifier = nn.Linear(hidden_dim, 504)
         self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.role_embed = nn.Embedding(num_roles, hidden_dim)
+        self.bbox_embed = None
+        self.verb_role_query_embed = nn.Embedding(num_verb_queries+num_role_queries, hidden_dim)
+        self.role_adj_mat = role_adj_mat
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
-
-        self.avg_pool = nn.AvgPool2d(22)
-        self.verb_classifier = nn.Linear(hidden_dim, 504)
 
     def forward(self, samples: NestedTensor, targets):
         """ The forward expects a NestedTensor, which consists of:
@@ -69,25 +69,11 @@ class DETR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
         
-        batch_hs = []
-        batch_memory = []
+        rhs, vhs, _ = self.transformer(self.input_proj(src), mask, self.verb_role_query_embed.weight, self.role_adj_mat, pos[-1])
+        outputs_class = self.class_embed(rhs)
+        outputs_verb = self.verb_classifier(vhs)
 
-        for i in range(src.shape[0]): #batchsize
-            selected_query_embed = self.role_embed.weight[targets[i]['roles']]
-            sliced_hs, sliced_memory = self.transformer(self.input_proj(src[i:i+1]), mask[i:i+1], selected_query_embed, pos[-1][i:i+1]) # hs : num_layer x 1 x num_queries x hidden_dim
-            padded_hs = F.pad(sliced_hs, (0,0,0,6-len(selected_query_embed)), mode='constant', value=0)
-            batch_hs.append(padded_hs)
-            batch_memory.append(sliced_memory)    
-        
-        hs = torch.cat(batch_hs, dim=1)
-        memory = torch.cat(batch_memory, dim=0) #bs * c * h * w       
-        outputs_class = self.class_embed(hs)
-        outputs_verb = self.avg_pool(memory).squeeze(dim=2).squeeze(dim=2)
-        outputs_verb = self.verb_classifier(outputs_verb)
-        outputs_coord = self.bbox_embed(hs).sigmoid()
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_verb': outputs_verb}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+        out = {'pred_logits': outputs_class[-1], 'pred_verb': outputs_verb[-1]}
 
         return out
 
@@ -311,7 +297,7 @@ class SWiGCriterion(nn.Module):
         self.num_classes = num_classes
         self.weight_dict = weight_dict
         self.loss_function = LabelSmoothing(0.2)
-        self.loss_function_for_verb = LabelSmoothing(0.2)
+        self.loss_function_verb = LabelSmoothing(0.2)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -323,24 +309,25 @@ class SWiGCriterion(nn.Module):
         assert 'pred_logits' in outputs
         batch_noun_loss = []
         batch_noun_acc = []
-        verb_pred_logits = outputs['pred_verb']
-
-        for b, (p, t) in enumerate(zip(outputs['pred_logits'], targets)):
-            num_roles = len(t['roles'])
+        for b, t in enumerate(targets):
             role_noun_loss = []
             for n in range(3):
-                role_noun_loss.append(self.loss_function(p[:num_roles], t['labels'][:num_roles, n].long().cuda()))
+                role_noun_loss.append(self.loss_function(
+                    outputs['pred_logits'][b, t['roles']], t['labels'][:len(t['roles']), n].long().cuda()))
             batch_noun_loss.append(sum(role_noun_loss)/3)
-            batch_noun_acc += accuracy_swig(p[:num_roles], t['labels'][:num_roles].long().cuda())
+            batch_noun_acc += accuracy_swig(outputs['pred_logits'][b, t['roles']],
+                                            t['labels'][:len(t['roles'])].long().cuda())
         noun_loss = torch.stack(batch_noun_loss).mean()
         noun_acc = torch.stack(batch_noun_acc).mean()
 
+        # assert 'pred_logits' in outputs
+        verb_pred_logits = outputs['pred_verb'].squeeze(1)
         gt_verbs = torch.stack([t['verbs'] for t in targets])
-        verb_loss = self.loss_function_for_verb(verb_pred_logits, gt_verbs)
+        verb_loss = self.loss_function_verb(verb_pred_logits, gt_verbs)
         verb_acc = accuracy(verb_pred_logits, gt_verbs)[0]
-        
-        return {'loss_vce': verb_loss, 'loss_nce': noun_loss, 'verb_acc': verb_acc, 'noun_acc': noun_acc, 'class_error': torch.tensor(0.).cuda(), 'loss_bbox': outputs['pred_boxes'].sum() * 0}
 
+        return {'loss_nce': noun_loss, 'noun_acc': noun_acc, 'loss_vce': verb_loss, 'verb_acc': verb_acc,
+                'class_error': torch.tensor(0.).cuda()}
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
@@ -398,30 +385,32 @@ def build(args):
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
     num_classes = 20 if args.dataset_file != 'coco' else 91
+    device = torch.device(args.device)
     if args.dataset_file == "coco_panoptic":
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
         num_classes = 250
-    elif args.dataset_file == "swig":
+    elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
-        assert args.num_roles == 190  # 190 or 504+190
-    device = torch.device(args.device)
+        vidx_ridx = args.vidx_ridx
+        role_adj_mat = torch.tensor(args.role_adj_mat).to(device)
+        assert args.num_role_queries == 190  # 190 or 504+190
 
     backbone = build_backbone(args)
-
     transformer = build_transformer(args)
 
     model = DETR(
         backbone,
         transformer,
         num_classes=num_classes,
-        num_roles=args.num_roles,
+        num_verb_queries=args.num_verb_queries,
+        num_role_queries=args.num_role_queries,
+        role_adj_mat=role_adj_mat,
         aux_loss=args.aux_loss,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    weight_dict = {'loss_nce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_vce'] = args.loss_ratio
+    weight_dict = {'loss_nce': args.noun_loss_coef, 'loss_vce': args.verb_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
@@ -436,7 +425,7 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
     if args.masks:
         losses += ["masks"]
-    if args.dataset_file != "swig":
+    if args.dataset_file != "swig" and args.dataset_file != "imsitu":
         matcher = build_matcher(args)
         criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                                  eos_coef=args.eos_coef, losses=losses)

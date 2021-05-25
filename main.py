@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
+from torch.optim.lr_scheduler import LambdaLR
+import math
 
 import datasets
 import util.misc as utils
@@ -16,14 +18,13 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch, evaluate_swig
 from models import build_model
 
-
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
-    parser.add_argument('--lr_backbone', default=1e-5, type=float)
+    parser.add_argument('--lr_backbone', default=1e-6, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
-    parser.add_argument('--epochs', default=300, type=int)
+    parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
@@ -40,9 +41,9 @@ def get_args_parser():
                         help="Type of positional embedding to use on top of the image features")
 
     # * Transformer
-    parser.add_argument('--enc_layers', default=1, type=int,
+    parser.add_argument('--enc_layers', default=6, type=int,
                         help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=1, type=int,
+    parser.add_argument('--dec_layers', default=6, type=int,
                         help="Number of decoding layers in the transformer")
     parser.add_argument('--dim_feedforward', default=2048, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
@@ -52,10 +53,10 @@ def get_args_parser():
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_verbs', default=1, type=int,
-                        help="Number of verb slots")
-    parser.add_argument('--num_roles', default=190, type=int,
-                        help="Number of role slots")
+    parser.add_argument('--num_verb_queries', type=int,
+                        help="Number of verb query slots")
+    parser.add_argument('--num_role_queries', type=int,
+                        help="Number of role query slots")
     parser.add_argument('--pre_norm', action='store_true')
 
     # * Segmentation
@@ -79,13 +80,14 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
-    parser.add_argument('--loss_ratio', default = 1, type=float,
-                        help="Relative loss ratio between noun-loss and verb-loss")
+    parser.add_argument('--noun_loss_coef', default=1, type=float)
+    parser.add_argument('--verb_loss_coef', default=1, type=float)
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='swig')
+    parser.add_argument('--dataset_file', default='imsitu')
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
+    parser.add_argument('--imsitu_path', type=str, default="imSitu")
     parser.add_argument('--swig_path', type=str, default="SWiG")
     parser.add_argument('--remove_difficult', action='store_true')
 
@@ -125,7 +127,7 @@ def main(args):
 
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
-    if args.dataset_file == "swig":
+    if args.dataset_file == "swig" or args.dataset_file == "imsitu":
         args.num_classes = dataset_train.num_nouns()
     model, criterion, postprocessors = build_model(args)
     model.to(device)
@@ -148,7 +150,6 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
         sampler_val = DistributedSampler(dataset_val, shuffle=False)
@@ -161,9 +162,9 @@ def main(args):
             sampler_train, args.batch_size, drop_last=True)
 
         data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
-                                    collate_fn=utils.collate_fn, num_workers=args.num_workers)
+                                       collate_fn=utils.collate_fn, num_workers=args.num_workers)
         data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
-                                    drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
+                                     drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
     elif args.dataset_file == "swig":
         from datasets.swig import AspectRatioBasedSampler, collater
         # time too long
@@ -172,8 +173,17 @@ def main(args):
         # batch_sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=args.batch_size, drop_last=True)  # TODO check drop_last
         # data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers, drop_last=False, collate_fn=collater, batch_sampler=batch_sampler_val)
         batch_sampler_train = torch.utils.data.BatchSampler(sampler_train, args.batch_size, drop_last=True)
-        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers, collate_fn=collater, batch_sampler=batch_sampler_train)
-        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers, drop_last=False, collate_fn=collater, sampler=sampler_val)
+        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
+                                       collate_fn=collater, batch_sampler=batch_sampler_train)
+        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
+                                     drop_last=False, collate_fn=collater, sampler=sampler_val)
+    elif args.dataset_file == "imsitu":
+        from datasets.imsitu import collater
+        batch_sampler_train = torch.utils.data.BatchSampler(sampler_train, args.batch_size, drop_last=True)
+        data_loader_train = DataLoader(dataset_train, num_workers=args.num_workers,
+                                       collate_fn=collater, batch_sampler=batch_sampler_train)
+        data_loader_val = DataLoader(dataset_val, num_workers=args.num_workers,
+                                     drop_last=False, collate_fn=collater, sampler=sampler_val)
 
     if args.dataset_file == "coco_panoptic":
         # We also evaluate AP during panoptic training, on original coco DS
@@ -202,8 +212,8 @@ def main(args):
     if args.eval:
         if (args.dataset_file == "coco") or (args.dataset_file == "coco_panoptic"):
             test_stats, evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
-        elif args.dataset_file == "swig":
+                                             data_loader_val, base_ds, device, args.output_dir)
+        elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
             test_stats = evaluate_swig(model, criterion, postprocessors,
                                        data_loader_val, device, args.output_dir)
         if args.output_dir:
@@ -224,8 +234,8 @@ def main(args):
 
         if (args.dataset_file == "coco") or (args.dataset_file == "coco_panoptic"):
             test_stats, evaluator = evaluate(model, criterion, postprocessors,
-                                                data_loader_val, base_ds, device, args.output_dir)
-        elif args.dataset_file == "swig":
+                                             data_loader_val, base_ds, device, args.output_dir)
+        elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
             test_stats = evaluate_swig(model, criterion, postprocessors,
                                        data_loader_val, device, args.output_dir)
 
