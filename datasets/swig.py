@@ -93,7 +93,7 @@ class CSVDataset(Dataset):
         # digonal is false (role need to consider itself)
         for i in range(len(self.role_to_idx)):
             self.role_adj_matrix[i, i] = False
-            
+
         for ridx in self.vidx_ridx:
             ridx = np.array(ridx)
             self.role_adj_matrix[ridx[:, None], ridx] = np.zeros(len(ridx)).astype(bool)
@@ -293,8 +293,8 @@ def collater(data):
     heights = [int(s.shape[1]) for s in imgs]
 
     batch_size = len(imgs)
-    max_width = 704
-    max_height = 704
+    max_width = 354
+    max_height = 354
 
     padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
 
@@ -334,7 +334,7 @@ class Resizer(object):
         self.is_for_training = is_for_training
 
 
-    def __call__(self, sample, min_side=512, max_side=700):
+    def __call__(self, sample, min_side=256, max_side=350):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
@@ -361,8 +361,8 @@ class Resizer(object):
         new_image = np.zeros((rows, cols, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        shift_1 = int((704 - cols) * .5)
-        shift_0 = int((704 - rows) * .5)
+        shift_1 = int((354 - cols) * .5)
+        shift_0 = int((354 - rows) * .5)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
 
