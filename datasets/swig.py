@@ -293,9 +293,8 @@ def collater(data):
     heights = [int(s.shape[1]) for s in imgs]
 
     batch_size = len(imgs)
-    # TODO
-    max_width = 354
-    max_height = 354
+    max_width = 704
+    max_height = 704
 
     padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
 
@@ -331,15 +330,11 @@ def collater(data):
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __init__(self, is_for_training, min_side, max_side):
+    def __init__(self, is_for_training):
         self.is_for_training = is_for_training
-        self.min_side = min_side
-        self.max_side = max_side
 
 
-    def __call__(self, sample):
-        min_side = self.min_side
-        max_side = self.max_side
+    def __call__(self, sample, min_side=512, max_side=700):
         image, annots, image_name = sample['img'], sample['annot'], sample['img_name']
 
         rows_orig, cols_orig, cns_orig = image.shape
@@ -366,8 +361,8 @@ class Resizer(object):
         new_image = np.zeros((rows, cols, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        shift_1 = int((self.max_side + 4 - cols) * .5)
-        shift_0 = int((self.max_side + 4 - rows) * .5)
+        shift_1 = int((704 - cols) * .5)
+        shift_0 = int((704 - rows) * .5)
 
         annots[:, :4][annots[:, :4] > 0] *= scale
 
@@ -473,12 +468,7 @@ class AspectRatioBasedSampler(Sampler):
 
 def build(image_set, args):
     root = Path(args.swig_path)
-    img_folder = root / args.image_folder
-    IMG_RESIZE = {
-        'small': [256, 350],
-        'big': [512, 700],
-    }
-    min_side, max_side = IMG_RESIZE[args.image_resize]
+    img_folder = root / "images_512"
 
     PATHS = {
         "train": root / "SWiG_jsons" / "train.json",
@@ -498,9 +488,9 @@ def build(image_set, args):
     is_training = image_set == 'train'
 
     TRANSFORMS = {
-        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True, min_side=min_side, max_side=max_side)]),
-        "val": transforms.Compose([Normalizer(), Resizer(False, min_side=min_side, max_side=max_side)]),
-        "test": transforms.Compose([Normalizer(), Resizer(False, min_side=min_side, max_side=max_side)]),
+        "train": transforms.Compose([Normalizer(), Augmenter(), Resizer(True)]),
+        "val": transforms.Compose([Normalizer(), Resizer(False)]),
+        "test": transforms.Compose([Normalizer(), Resizer(False)]),
     }
     tfs = TRANSFORMS[image_set]
     
