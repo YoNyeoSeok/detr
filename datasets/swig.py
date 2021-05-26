@@ -277,11 +277,12 @@ def collater(data):
     max_width = 354
     max_height = 354
 
-    padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
+    padded_imgs = [img.permute(2, 0, 1) for img in imgs]
+    # padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
 
-    for i in range(batch_size):
-        img = imgs[i]
-        padded_imgs[i, shift_0[i]:shift_0[i]+img.shape[0], shift_1[i]:shift_1[i]+img.shape[1], :] = img
+    # for i in range(batch_size):
+    #     img = imgs[i]
+    #     padded_imgs[i, shift_0[i]:shift_0[i]+img.shape[0], shift_1[i]:shift_1[i]+img.shape[1], :] = img
 
 
     max_num_annots = max(annot.shape[0] for annot in annots)
@@ -298,7 +299,7 @@ def collater(data):
     else:
         annot_padded = torch.ones((len(annots), 1, 7)) * -1
 
-    padded_imgs = padded_imgs.permute(0, 3, 1, 2)
+    # padded_imgs = padded_imgs.permute(0, 3, 1, 2)
 
     return (util.misc.nested_tensor_from_tensor_list(padded_imgs),
             [{'verbs': vi,
