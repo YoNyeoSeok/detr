@@ -41,6 +41,10 @@ def get_args_parser():
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
+    parser.add_argument('--verb_classifier_num', type=int, default=2, choices=[1, 2])
+    parser.add_argument('--verb_classifier_dropout', type=float, default=0.2)
+    parser.add_argument('--noun_classifier_num', type=int, default=2, choices=[1, 2])
+    parser.add_argument('--noun_classifier_dropout', type=float, default=0.2)
 
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
@@ -82,8 +86,10 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
-    parser.add_argument('--noun_loss_coef', default=1, type=float)
-    parser.add_argument('--verb_loss_coef', default=1, type=float)
+    parser.add_argument('--verb_loss_smoothing', type=float, default=0.2)
+    parser.add_argument('--noun_loss_smoothing', type=float, default=0.2)
+    parser.add_argument('--noun_loss_coef', required=True, type=float)
+    parser.add_argument('--verb_loss_coef', required=True, type=float)
 
     # dataset parameters
     parser.add_argument('--dataset_file', required=True)

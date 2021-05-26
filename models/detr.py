@@ -20,7 +20,8 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, 
+                 verb_classifier_num, verb_classifier_dropout, noun_classifier_num, noun_classifier_dropout, aux_loss=False,):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -35,8 +36,26 @@ class DETR(nn.Module):
         self.num_role_queries = num_role_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.verb_classifier = nn.Linear(hidden_dim, 504)
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
+        if verb_classifier_num == 1:
+            self.verb_classifier = nn.Linear(hidden_dim, 504)
+        elif verb_classifier_num == 2:
+            self.verb_classifier = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim*2),
+                nn.ReLU(),
+                nn.Dropout(verb_classifier_dropout),
+                nn.Linear(hidden_dim*2, 504))
+        else:
+            assert False
+        if noun_classifier_num == 1:
+            self.class_embed = nn.Linear(hidden_dim, num_classes)
+        elif noun_classifier_num == 2:
+            self.class_embed = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim*2),
+                nn.ReLU(),
+                nn.Dropout(noun_classifier_dropout),
+                nn.Linear(hidden_dim*2, num_classes))
+        else:
+            assert False
         self.bbox_embed = None
         self.verb_role_query_embed = nn.Embedding(num_verb_queries+num_role_queries, hidden_dim)
         #self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
@@ -290,14 +309,14 @@ class SWiGCriterion(nn.Module):
     """ This class computes the loss for DETR with SWiG dataset.
     """
 
-    def __init__(self, num_classes, weight_dict):
+    def __init__(self, num_classes, weight_dict, verb_smoothing, noun_smoothing):
         """ Create the criterion.
         """
         super().__init__()
         self.num_classes = num_classes
         self.weight_dict = weight_dict
-        self.loss_function = LabelSmoothing(0.2)
-        self.loss_function_verb = LabelSmoothing(0.2)
+        self.loss_function = LabelSmoothing(noun_smoothing)
+        self.loss_function_verb = LabelSmoothing(verb_smoothing)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -403,6 +422,10 @@ def build(args):
         num_classes=num_classes,
         num_verb_queries=args.num_verb_queries,
         num_role_queries=args.num_role_queries,
+        verb_classifier_num=args.verb_classifier_num,
+        verb_classifier_dropout=args.verb_classifier_dropout,
+        noun_classifier_num=args.noun_classifier_num,
+        noun_classifier_dropout=args.noun_classifier_dropout,
         aux_loss=args.aux_loss,
     )
     if args.masks:
@@ -428,7 +451,9 @@ def build(args):
                                  eos_coef=args.eos_coef, losses=losses)
         criterion.to(device)
     else:
-        criterion = SWiGCriterion(num_classes, weight_dict=weight_dict)
+        criterion = SWiGCriterion(num_classes, weight_dict=weight_dict,
+                                  verb_smoothing=args.verb_loss_smoothing,
+                                  noun_smoothing=args.noun_loss_smoothing)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
         postprocessors['segm'] = PostProcessSegm()
