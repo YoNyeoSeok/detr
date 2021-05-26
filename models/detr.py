@@ -20,7 +20,8 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, 
+    def __init__(self, backbone, transformer, num_classes, num_verb_queries, num_role_queries, role_adj_mat, 
+                 use_role_adj_mask, mask_verb_from_roles, mask_roles_from_verb,
                  verb_classifier_num, verb_classifier_dropout, noun_classifier_num, noun_classifier_dropout, aux_loss=False,):
         """ Initializes the model.
         Parameters:
@@ -58,7 +59,10 @@ class DETR(nn.Module):
             assert False
         self.bbox_embed = None
         self.verb_role_query_embed = nn.Embedding(num_verb_queries+num_role_queries, hidden_dim)
-        #self.role_query_embed = nn.Embedding(num_role_queries, hidden_dim)
+        self.role_adj_mat = role_adj_mat
+        self.use_role_adj_mask = use_role_adj_mask
+        self.mask_verb_from_roles = mask_verb_from_roles
+        self.mask_roles_from_verb = mask_roles_from_verb
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -87,8 +91,12 @@ class DETR(nn.Module):
 
         src, mask = features[-1].decompose()
         assert mask is not None
-        
-        rhs, vhs, _ = self.transformer(self.input_proj(src), mask, self.verb_role_query_embed.weight, pos[-1])
+
+        rhs, vhs, _ = self.transformer(self.input_proj(src), mask, self.verb_role_query_embed.weight, self.role_adj_mat, pos[-1],
+                                       use_role_adj_mask=self.use_role_adj_mask,
+                                       mask_verb_from_roles=self.mask_verb_from_roles,
+                                       mask_roles_from_verb=self.mask_roles_from_verb,
+                                       )
         outputs_class = self.class_embed(rhs)
         outputs_verb = self.verb_classifier(vhs)
 
@@ -404,14 +412,19 @@ def build(args):
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
     num_classes = 20 if args.dataset_file != 'coco' else 91
+    device = torch.device(args.device)
     if args.dataset_file == "coco_panoptic":
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
         num_classes = 250
     elif args.dataset_file == "swig" or args.dataset_file == "imsitu":
         num_classes = args.num_classes
+        vidx_ridx = args.vidx_ridx
+        role_adj_mat = torch.tensor(args.role_adj_mat).to(device)
+        use_role_adj_mask = args.use_role_adj_mask
+        mask_verb_from_roles = args.mask_verb_from_roles
+        mask_roles_from_verb = args.mask_roles_from_verb
         assert args.num_role_queries == 190  # 190 or 504+190
-    device = torch.device(args.device)
 
     backbone = build_backbone(args)
     transformer = build_transformer(args)
@@ -422,6 +435,10 @@ def build(args):
         num_classes=num_classes,
         num_verb_queries=args.num_verb_queries,
         num_role_queries=args.num_role_queries,
+        role_adj_mat=role_adj_mat,
+        use_role_adj_mask=use_role_adj_mask,
+        mask_verb_from_roles=mask_verb_from_roles,
+        mask_roles_from_verb=mask_roles_from_verb,
         verb_classifier_num=args.verb_classifier_num,
         verb_classifier_dropout=args.verb_classifier_dropout,
         noun_classifier_num=args.noun_classifier_num,

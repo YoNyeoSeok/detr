@@ -13,6 +13,7 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
+import numpy as np
 
 
 class Transformer(nn.Module):
@@ -43,18 +44,51 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, verb_role_query_embed, pos_embed):
+    def forward(self, src, mask, verb_role_query_embed, role_tgt_mask, pos_embed,
+                use_role_adj_mask,
+                mask_verb_from_roles,
+                mask_roles_from_verb,
+                ):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
         pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
         verb_role_query_embed = verb_role_query_embed.unsqueeze(1).repeat(1, bs, 1)
         mask = mask.flatten(1)
+        device = src.device
 
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
 
         verb_role_tgt = torch.zeros_like(verb_role_query_embed)
-        vrhs = self.decoder(verb_role_tgt, memory, memory_key_padding_mask=mask,
+
+        if mask_verb_from_roles:
+            # role cannot see verb
+            verb_tgt_mask = torch.tensor(np.ones((190, 1)).astype(bool)).to(device)
+        else:
+            # role can see verb
+            verb_tgt_mask = torch.tensor(np.zeros((190, 1)).astype(bool)).to(device)
+
+        if mask_roles_from_verb:
+            # verb cannot see verb, roles
+            verb_tgt_mask_2 = torch.tensor(np.ones((1,191)).astype(bool)).to(device)
+            # verb can see itself
+            verb_tgt_mask_2[0, 0] = False
+        else:
+            # verb can see roles
+            verb_tgt_mask_2 = torch.tensor(np.zeros((1,191)).astype(bool)).to(device)
+
+        # 190x191
+        if use_role_adj_mask:
+            # role can see related roles
+            verb_role_tgt_mask = torch.cat([verb_tgt_mask, role_tgt_mask], dim=1)
+        else:
+            # role can see all roles
+            verb_role_tgt_mask = torch.cat([verb_tgt_mask, torch.zeros_like(role_tgt_mask)], dim=1)
+            
+        # 191x191
+        verb_role_tgt_mask_2 = torch.cat([verb_tgt_mask_2, verb_role_tgt_mask], dim=0)
+        
+        vrhs = self.decoder(verb_role_tgt, memory, tgt_mask = verb_role_tgt_mask_2, memory_key_padding_mask=mask,
                            pos=pos_embed, query_pos=verb_role_query_embed)
 
         vhs, rhs = torch.split(vrhs, [1, 190], dim=1)

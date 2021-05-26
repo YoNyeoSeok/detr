@@ -64,6 +64,12 @@ def get_args_parser():
     parser.add_argument('--num_role_queries', type=int, default=190,
                         help="Number of role query slots")
     parser.add_argument('--pre_norm', action='store_true')
+    parser.add_argument('--use_role_adj_mask', action='store_true',
+                        help="Mask not related roles")
+    parser.add_argument('--mask_verb_from_roles', action='store_true',
+                        help="Mask verb from roles (roles not use verb attention, roles don't see verb)")
+    parser.add_argument('--mask_roles_from_verb', action='store_true',
+                        help="Mask roles from verb (verb not uses attention of roles, verb doesn't see roles)")
 
     # * Segmentation
     parser.add_argument('--masks', action='store_true',
