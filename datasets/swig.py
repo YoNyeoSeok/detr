@@ -467,7 +467,7 @@ def build(image_set, args):
     }
     ann_file = PATHS[image_set]
 
-    classes_file = Path(args.swig_path) / "SWiG_jsons" / "train_classes.csv"
+    classes_file = Path(args.swig_path) / "SWiG_jsons" / "train_classes_freq2000.csv"
     verb_path = Path(args.swig_path) / "SWiG_jsons" / "verb_indices.txt"
     role_path = Path(args.swig_path) / "SWiG_jsons" / "role_indices.txt"
 
