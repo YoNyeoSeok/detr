@@ -28,7 +28,7 @@ def get_args_parser():
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--lr_drop', default=200, type=int)
-    parser.add_argument('--clip_max_norm', default=0.1, type=float,
+    parser.add_argument('--clip_max_norm', default=0.2, type=float,
                         help='gradient clipping max norm')
 
     # Model parameters
@@ -59,9 +59,9 @@ def get_args_parser():
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_verb_queries', type=int,
+    parser.add_argument('--num_verb_queries', type=int, default=1,
                         help="Number of verb query slots")
-    parser.add_argument('--num_role_queries', type=int,
+    parser.add_argument('--num_role_queries', type=int, default=190,
                         help="Number of role query slots")
     parser.add_argument('--pre_norm', action='store_true')
 
