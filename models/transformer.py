@@ -9,10 +9,13 @@ Copy-paste from torch.nn.Transformer with modifications:
 """
 import copy
 from typing import Optional, List
+from numpy import imag
 
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
+from torch.nn.modules.linear import _LinearWithBias
+
 
 
 class Transformer(nn.Module):
@@ -44,7 +47,7 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed):
+    def forward(self, src, mask, query_embed, pos_embed, decoder_tgt_mask, decoder_memroy_mask, need_weights = False):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
@@ -54,9 +57,9 @@ class Transformer(nn.Module):
 
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
-        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
+        hs, attn_weight, image_attn_weight = self.decoder(tgt, memory, tgt_mask=decoder_tgt_mask, memory_mask = decoder_memroy_mask,
+         memory_key_padding_mask=mask, pos=pos_embed, query_pos=query_embed, need_weights= need_weights) 
+        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w), attn_weight, image_attn_weight
 
 
 class TransformerEncoder(nn.Module):
@@ -98,19 +101,27 @@ class TransformerDecoder(nn.Module):
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                query_pos: Optional[Tensor] = None, 
+                need_weights =False):
         output = tgt
 
         intermediate = []
+        attn_weight_list = []
+        image_attn_weight_list = []
 
         for layer in self.layers:
-            output = layer(output, memory, tgt_mask=tgt_mask,
+            output, attn_weight, image_attn_weight = layer(output, memory, tgt_mask=tgt_mask,
                            memory_mask=memory_mask,
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
-                           pos=pos, query_pos=query_pos)
+                           pos=pos, query_pos=query_pos, need_weights = need_weights)
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
+            if need_weights:
+                attn_weight_list.append(attn_weight)
+                image_attn_weight_list.append(image_attn_weight)
+        
+        (attn_weight, image_attn_weight) = (torch.stack(attn_weight_list), torch.stack(image_attn_weight_list)) if need_weights else (None, None)
 
         if self.norm is not None:
             output = self.norm(output)
@@ -119,9 +130,9 @@ class TransformerDecoder(nn.Module):
                 intermediate.append(output)
 
         if self.return_intermediate:
-            return torch.stack(intermediate)
+            return torch.stack(intermediate), attn_weight, image_attn_weight
 
-        return output.unsqueeze(0)
+        return output.unsqueeze(0), attn_weight, image_attn_weight
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -191,7 +202,6 @@ class TransformerDecoderLayer(nn.Module):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
@@ -215,22 +225,23 @@ class TransformerDecoderLayer(nn.Module):
                      tgt_key_padding_mask: Optional[Tensor] = None,
                      memory_key_padding_mask: Optional[Tensor] = None,
                      pos: Optional[Tensor] = None,
-                     query_pos: Optional[Tensor] = None):
+                     query_pos: Optional[Tensor] = None,
+                     need_weights = False):
         q = k = self.with_pos_embed(tgt, query_pos)
-        tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
-                              key_padding_mask=tgt_key_padding_mask)[0]
+        tgt2, attn_weight = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
+                              key_padding_mask=tgt_key_padding_mask, need_weights=need_weights)
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
+        tgt2, image_attn_weight = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
                                    key=self.with_pos_embed(memory, pos),
                                    value=memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+                                   key_padding_mask=memory_key_padding_mask, need_weights=need_weights)
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)
-        return tgt
+        return (tgt, attn_weight, image_attn_weight) if need_weights else (tgt, None, None)
 
     def forward_pre(self, tgt, memory,
                     tgt_mask: Optional[Tensor] = None,
@@ -238,22 +249,23 @@ class TransformerDecoderLayer(nn.Module):
                     tgt_key_padding_mask: Optional[Tensor] = None,
                     memory_key_padding_mask: Optional[Tensor] = None,
                     pos: Optional[Tensor] = None,
-                    query_pos: Optional[Tensor] = None):
+                    query_pos: Optional[Tensor] = None,
+                    need_weights = False):
         tgt2 = self.norm1(tgt)
         q = k = self.with_pos_embed(tgt2, query_pos)
-        tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
-                              key_padding_mask=tgt_key_padding_mask)[0]
+        tgt2, attn_weight = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
+                              key_padding_mask=tgt_key_padding_mask, need_weights= need_weights)
         tgt = tgt + self.dropout1(tgt2)
         tgt2 = self.norm2(tgt)
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
+        tgt2, image_attn_weight = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
                                    key=self.with_pos_embed(memory, pos),
                                    value=memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+                                   key_padding_mask=memory_key_padding_mask, need_weights= need_weights)
         tgt = tgt + self.dropout2(tgt2)
         tgt2 = self.norm3(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
         tgt = tgt + self.dropout3(tgt2)
-        return tgt
+        return (tgt, attn_weight, image_attn_weight) if need_weights else (tgt, None, None)
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -261,12 +273,13 @@ class TransformerDecoderLayer(nn.Module):
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                query_pos: Optional[Tensor] = None,
+                need_weights = False):
         if self.normalize_before:
             return self.forward_pre(tgt, memory, tgt_mask, memory_mask,
-                                    tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                    tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, need_weights, need_weights=need_weights)
         return self.forward_post(tgt, memory, tgt_mask, memory_mask,
-                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, need_weights=need_weights)
 
 
 def _get_clones(module, N):
@@ -282,7 +295,7 @@ def build_transformer(args):
         num_encoder_layers=args.enc_layers,
         num_decoder_layers=args.dec_layers,
         normalize_before=args.pre_norm,
-        return_intermediate_dec=True,
+        return_intermediate_dec=False,
     )
 
 

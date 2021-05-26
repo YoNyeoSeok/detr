@@ -408,9 +408,9 @@ def init_distributed_mode(args):
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ['WORLD_SIZE'])
         args.gpu = int(os.environ['LOCAL_RANK'])
-    # elif 'SLURM_PROCID' in os.environ:
-    #     args.rank = int(os.environ['SLURM_PROCID'])
-    #     args.gpu = args.rank % torch.cuda.device_count()
+    elif 'SLURM_PROCID' in os.environ:
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.gpu = args.rank % torch.cuda.device_count()
     else:
         print('Not using distributed mode')
         args.distributed = False
@@ -428,40 +428,17 @@ def init_distributed_mode(args):
     setup_for_distributed(args.rank == 0)
 
 
-@torch.no_grad()
-def accuracy(output, target, topk=(1,)):
-    """Computes the precision@k for the specified values of k"""
-    if target.numel() == 0:
-        return [torch.zeros([], device=output.device)]
-    maxk = max(topk)
-    batch_size = target.size(0)
-
-    _, pred = output.topk(maxk, 1, True, True)
-    pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-    res = []
-    for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
-        res.append(correct_k.mul_(100.0 / batch_size))
-    return res
+def masked_sum(input, mask, dim):
+    return (input / mask).nansum(dim)
 
 
-def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corners=None):
-    # type: (Tensor, Optional[List[int]], Optional[float], str, Optional[bool]) -> Tensor
-    """
-    Equivalent to nn.functional.interpolate, but with support for empty batch sizes.
-    This will eventually be supported natively by PyTorch, and this
-    class can go away.
-    """
-    if float(torchvision.__version__[:3]) < 0.7:
-        if input.numel() > 0:
-            return torch.nn.functional.interpolate(
-                input, size, scale_factor, mode, align_corners
-            )
+def masked_mean(input, mask, dim):
+    return ((input / mask).nansum(dim) / mask.sum(dim)).nan_to_num(0)
 
-        output_shape = _output_size(2, input, size, scale_factor)
-        output_shape = list(input.shape[:-2]) + list(output_shape)
-        return _new_empty_tensor(input, output_shape)
-    else:
-        return torchvision.ops.misc.interpolate(input, size, scale_factor, mode, align_corners)
+
+def masked_any(input, mask, dim):
+    return (input / mask).nansum(dim).bool()
+
+
+def masked_all(input, mask, dim):
+    return (input / mask).nansum(dim).eq(mask.sum(dim))
