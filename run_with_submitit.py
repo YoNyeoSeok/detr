@@ -99,10 +99,10 @@ def main():
         slurm_partition=args.partition,
         nodes=nodes,
         timeout_min=timeout_min,  # max is 60 * 72
-        slurm_additional_parameters={"nodelist":"n3"},
+        slurm_additional_parameters={"nodelist":"n4"},
     )
 
-    executor.update_parameters(name="detr")
+    executor.update_parameters(name="gsrtr")
 
     args.dist_url = get_init_file().as_uri()
     args.output_dir = args.job_dir

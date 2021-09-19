@@ -1,7 +1,7 @@
 [ ! -d "log" ] && mkdir log
 
 PART="2080ti"
-NAME="gstr_pretrained"
+NAME="gstr_scratch5"
 
 echo ${NAME}
 rm -rf log/${NAME}
