@@ -20,6 +20,52 @@ def box_xyxy_to_cxcywh(x):
     return torch.stack(b, dim=-1)
 
 
+def swig_box_xyxy_to_cxcywh(x, mw, mh, device=None, gt=False):
+    # if x0, y0, x1, y1 == -1, -1, -1, -1, then cx and cy are -1.
+    # so we can determine with b[:, 0] != -1 (for gt)
+    x0, y0, x1, y1 = x[:, 0], x[:, 1], x[:, 2], x[:, 3]
+    cx = ((x0 + x1) / 2).unsqueeze(1)
+    cy = ((y0 + y1) / 2).unsqueeze(1)
+    w = ((x1 - x0)).unsqueeze(1)
+    h = ((y1 - y0)).unsqueeze(1)
+    b = torch.cat([cx, cy, w, h], dim=1)
+    if device is None:
+        if gt:
+            b[b[:,0] != -1] /= torch.tensor([mw, mh, mw, mh], dtype=torch.float32)
+            b[b[:,0] == -1] = -1
+        else:
+            b /= torch.tensor([mw, mh, mw, mh], dtype=torch.float32)
+    else:
+        if gt:
+            b[b[:,0] != -1] /= torch.tensor([mw, mh, mw, mh], dtype=torch.float32, device=device)
+            b[b[:,0] == -1] = -1
+        else:
+            b /= torch.tensor([mw, mh, mw, mh], dtype=torch.float32, device=device)
+    return b
+
+def swig_box_cxcywh_to_xyxy(x, mw, mh, device=None, gt=False):
+    # if x_c, y_c, w, h == -1, -1, -1, -1, then x0 < 0.
+    # so we can determine with b[:, 0] < 0 (for gt)
+    if device is None:
+        if gt:
+            x[x[:,0] != -1] *= torch.tensor([mw, mh, mw, mh], dtype=torch.float32)
+        else:
+            x *= torch.tensor([mw, mh, mw, mh], dtype=torch.float32)
+    else:
+        if gt:
+            x[x[:,0] != -1] *= torch.tensor([mw, mh, mw, mh], dtype=torch.float32, device=device)
+        else:
+            x *= torch.tensor([mw, mh, mw, mh], dtype=torch.float32, device=device)
+    x_c, y_c, w, h = x[:, 0], x[:, 1], x[:, 2], x[:, 3]
+    x0 = (x_c - 0.5 * w).unsqueeze(1)
+    y0 = (y_c - 0.5 * h).unsqueeze(1)
+    x1 = (x_c + 0.5 * w).unsqueeze(1)
+    y1 = (y_c + 0.5 * h).unsqueeze(1)
+    b = torch.cat([x0, y0, x1, y1], dim=1)
+    if gt:
+        b[b[:,0] < 0] = -1
+    return b
+
 # modified from torchvision to also return the union
 def box_iou(boxes1, boxes2):
     area1 = box_area(boxes1)

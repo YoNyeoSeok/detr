@@ -442,9 +442,124 @@ def accuracy(output, target, topk=(1,)):
 
     res = []
     for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
+        correct_k = correct[:k].reshape(-1).float().sum(dim=0)
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
+
+
+@torch.no_grad()
+def accuracy_swig(output, target, topk=(1,)):
+    """Computes the accuracy for the specified values of k"""
+    if target.numel() == 0:
+        return [torch.zeros([], device=output.device)]
+    device = output.device
+    maxk = max(topk)
+    num_roles = target.size(0)
+
+    _, pred = output.topk(maxk, 1, True, True)
+    # num_roles x maxk -> num_roles x maxk x target_num
+    pred_tile = pred.unsqueeze(2).tile(1, 1, target.shape[1])
+    # num_roles x target_num -> num_roles x maxk x target_num
+    target_tile = target.unsqueeze(1).tile(1, pred.shape[1], 1)
+    # num_roles x maxk x target_num
+    correct_tile = pred_tile.eq(target_tile)
+    # num_roles x maxk x target_num -> num_roles x maxk -> maxk x num_roles
+    correct = correct_tile.any(2).t()
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].reshape(-1).float().sum(dim=0)
+        res.append(correct_k.mul_(100.0 / num_roles))
+    # -1 for padding (when there are less than 6 semantic roles)
+    correct = correct.long()
+    MAX_NUM_ROLES = 6
+    if num_roles != MAX_NUM_ROLES:
+        iter = MAX_NUM_ROLES - num_roles
+        for _ in range(iter):
+            correct = torch.cat([correct, torch.tensor([[-1]], device=device, dtype=torch.int32)], dim=-1)
+
+    return correct, res
+
+
+@torch.no_grad()
+def accuracy_swig_bbox(pred_bbox, pred_bbox_conf, gt_bbox, num_roles, noun_correct, bbox_exist, target, SWiG_json, idx_to_role, eval=False):
+    device = pred_bbox.device
+    w, h = target['width'], target['height']
+    shift_0, shift_1, scale  = target['shift_0'], target['shift_1'], target['scale']
+
+    if num_roles > 0:
+        # convert predicted boxes
+        for i in range(num_roles):
+            pred_bbox[i][0] = max(pred_bbox[i][0] - shift_1, 0)
+            pred_bbox[i][1] = max(pred_bbox[i][1] - shift_0, 0)
+            pred_bbox[i][2] = max(pred_bbox[i][2] - shift_1, 0)
+            pred_bbox[i][3] = max(pred_bbox[i][3] - shift_0, 0)
+            # locate predicted boxes within image (processing w/ image width & height)
+            pred_bbox[i][0] = min(pred_bbox[i][0], w)
+            pred_bbox[i][1] = min(pred_bbox[i][1], h)
+            pred_bbox[i][2] = min(pred_bbox[i][2], w)
+            pred_bbox[i][3] = min(pred_bbox[i][3], h)
+        pred_bbox /= scale
+        
+    # convert target boxes
+    if not eval:
+        gt_bbox[:, 0] = gt_bbox[:, 0] - shift_1
+        gt_bbox[:, 1] = gt_bbox[:, 1] - shift_0
+        gt_bbox[:, 2] = gt_bbox[:, 2] - shift_1
+        gt_bbox[:, 3] = gt_bbox[:, 3] - shift_0
+        gt_bbox /= scale
+    else:
+        # In evaluation, we load target boxes from original json file (to conservatively evaluate our model).
+        gt_bbox = get_ground_truth(target, SWiG_json, idx_to_role, device)
+            
+    correct = []
+    for i in range(num_roles):
+        if bbox_exist[i]:
+            if noun_correct[i] == 1 and pred_bbox_conf[i] >= 0:
+                correct.append(bb_intersection_over_union(pred_bbox[i], gt_bbox[i]))
+            else:
+                correct.append(False)
+        else:
+            if noun_correct[i] == 1 and pred_bbox_conf[i] < 0:
+                correct.append(True)
+            else:
+                correct.append(False)
+    
+    res = []
+    bbox_acc = float(sum(correct))
+    res.append(torch.tensor((bbox_acc * 100 / num_roles), device=device))
+
+    return res
+
+
+def get_ground_truth(target, SWiG_json, idx_to_role, device):
+    bboxes = []
+    img_name = target['img_name'].split('/')[-1]
+    for role in target['roles']:
+        role_name = idx_to_role[role]
+        if SWiG_json[img_name]["bb"][role_name][0] == -1:
+            bboxes.append(torch.tensor([-1, -1, -1, -1], device=device))
+        else:
+            b = [int(i) for i in SWiG_json[img_name]["bb"][role_name]]
+            bboxes.append(torch.tensor(b, device=device))
+    bboxes = torch.stack(bboxes)
+    return bboxes
+
+
+def bb_intersection_over_union(boxA, boxB): 
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+        interArea = max(xB - xA, 0) * max(yB - yA, 0)
+        boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        unionArea = max(boxAArea + boxBArea - interArea, 1e-4)
+        iou = interArea / float(unionArea)
+        if iou >= 0.5:
+            return True
+        else:
+            return False
 
 
 def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corners=None):

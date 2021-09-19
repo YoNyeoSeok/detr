@@ -13,7 +13,8 @@ from torch.utils.data import DataLoader, DistributedSampler
 import datasets
 import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
-from engine import evaluate, train_one_epoch
+from datasets.swig import collater
+from engine import evaluate, train_one_epoch, evaluate_swig
 from models import build_model
 
 
@@ -21,7 +22,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
-    parser.add_argument('--batch_size', default=2, type=int)
+    parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=300, type=int)
     parser.add_argument('--lr_drop', default=200, type=int)
@@ -73,16 +74,25 @@ def get_args_parser():
     # * Loss coefficients
     parser.add_argument('--mask_loss_coef', default=1, type=float)
     parser.add_argument('--dice_loss_coef', default=1, type=float)
-    parser.add_argument('--bbox_loss_coef', default=5, type=float)
-    parser.add_argument('--giou_loss_coef', default=2, type=float)
+    # parser.add_argument('--bbox_loss_coef', default=5, type=float)
+    # parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
+    # Loss coefficients
+    parser.add_argument('--noun_loss_coef', default=1, type=float)
+    parser.add_argument('--verb_loss_coef', default=1, type=float)
+    parser.add_argument('--bbox_loss_coef', default=5, type=float)
+    parser.add_argument('--bbox_conf_loss_coef', default=5, type=float)
+    parser.add_argument('--giou_loss_coef', default=5, type=float)
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='coco')
+    parser.add_argument('--dataset_file', default='swig')
+    parser.add_argument('--swig_path', default="SWiG", type=str)
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
+    parser.add_argument('--dev', default=False, action='store_true')
+    parser.add_argument('--test', default=False, action='store_true')
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -118,7 +128,14 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, criterion, postprocessors = build_model(args)
+    dataset_train = build_dataset(image_set='train', args=args)
+    dataset_val = build_dataset(image_set='val', args=args)
+
+    if args.dataset_file == "swig":
+        model, criterion, criterion2, postprocessors = build_model(args)
+    else:
+        model, criterion, postprocessors = build_model(args)
+        criterion2 = None
     model.to(device)
 
     model_without_ddp = model
@@ -139,9 +156,6 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-    dataset_train = build_dataset(image_set='train', args=args)
-    dataset_val = build_dataset(image_set='val', args=args)
-
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
         sampler_val = DistributedSampler(dataset_val, shuffle=False)
@@ -152,17 +166,23 @@ def main(args):
     batch_sampler_train = torch.utils.data.BatchSampler(
         sampler_train, args.batch_size, drop_last=True)
 
-    data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
-                                   collate_fn=utils.collate_fn, num_workers=args.num_workers)
-    data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
-                                 drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
-
-    if args.dataset_file == "coco_panoptic":
-        # We also evaluate AP during panoptic training, on original coco DS
-        coco_val = datasets.coco.build("val", args)
-        base_ds = get_coco_api_from_dataset(coco_val)
+    if args.dataset_file == "swig":
+        data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
+                                       collate_fn=collater, num_workers=args.num_workers)
+        data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
+                                     drop_last=False, collate_fn=collater, num_workers=args.num_workers)
     else:
-        base_ds = get_coco_api_from_dataset(dataset_val)
+        data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
+                                       collate_fn=utils.collate_fn, num_workers=args.num_workers)
+        data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
+                                     drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
+
+        if args.dataset_file == "coco_panoptic":
+            # We also evaluate AP during panoptic training, on original coco DS
+            coco_val = datasets.coco.build("val", args)
+            base_ds = get_coco_api_from_dataset(coco_val)
+        else:
+            base_ds = get_coco_api_from_dataset(dataset_val)
 
     if args.frozen_weights is not None:
         checkpoint = torch.load(args.frozen_weights, map_location='cpu')
@@ -175,17 +195,30 @@ def main(args):
                 args.resume, map_location='cpu', check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
+        model_without_ddp.load_state_dict(checkpoint["model"], strict=False)
+            # state_dict = checkpoint['model']
+            # for k, v in model.state_dict().items():
+            #     if k not in state_dict:
+            #         # print(k)
+            #         state_dict[k] = v
+            # import pdb
+            # pdb.set_trace()
+            # checkpoint["model"] = state_dict
+            # torch.save(checkpoint, "gsrtr-r50.pth")
+        # model_without_ddp.load_state_dict(state_dict)
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
 
     if args.eval:
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
-        if args.output_dir:
-            utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
+        if args.dataset_file == "swig":
+            test_stats = evaluate_swig(model, criterion, criterion2, data_loader_val, device, args.output_dir)
+        else:
+            test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
+                                                data_loader_val, base_ds, device, args.output_dir)
+            if args.output_dir:
+                utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
 
     print("Start training")
@@ -194,15 +227,15 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch,
+            model, criterion, criterion2, data_loader_train, optimizer, device, epoch,
             args.clip_max_norm)
         lr_scheduler.step()
         if args.output_dir:
-            checkpoint_paths = [output_dir / 'checkpoint.pth']
+            checkpoint_paths = [output_dir / f'checkpoint{epoch:04}.pth']
             # extra checkpoint before LR drop and every 100 epochs
             if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
-            for checkpoint_path in checkpoint_paths:
+            for checkpoint_path in checkpoint_paths[-1:]:
                 utils.save_on_master({
                     'model': model_without_ddp.state_dict(),
                     'optimizer': optimizer.state_dict(),
@@ -211,9 +244,13 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
-        test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
-        )
+        if args.dataset_file == "swig":
+            test_stats = evaluate_swig(model, criterion, criterion2, data_loader_val, device, args.output_dir)
+            coco_evaluator = None
+        else:
+            test_stats, coco_evaluator = evaluate(
+                model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+            )
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},

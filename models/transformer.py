@@ -17,7 +17,7 @@ from torch import nn, Tensor
 
 class Transformer(nn.Module):
 
-    def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
+    def __init__(self, vidx_ridx, d_model=512, nhead=8, num_encoder_layers=6,
                  num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False,
                  return_intermediate_dec=False):
@@ -25,14 +25,33 @@ class Transformer(nn.Module):
 
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
+        encoder_layer2 = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
         encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
         self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        self.encoder2 = TransformerEncoder(encoder_layer2, num_encoder_layers, encoder_norm)
 
         decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        decoder_layer2 = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
         decoder_norm = nn.LayerNorm(d_model)
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
                                           return_intermediate=return_intermediate_dec)
+        self.decoder2 = TransformerDecoder(decoder_layer2, num_decoder_layers, decoder_norm,
+                                          return_intermediate=return_intermediate_dec)
+
+        # token embed
+        self.enc_token_embed = nn.Embedding(1, d_model)
+        self.enc_token_embed2 = nn.Embedding(1, d_model)
+        self.verb_query_embed = nn.Embedding(504, d_model)
+        self.role_query_embed = nn.Embedding(190, d_model)
+        self.vidx_ridx = vidx_ridx
+        # classifer (for verb prediction)
+        self.verb_classifier = nn.Sequential(nn.Linear(d_model, d_model*2),
+                                             nn.ReLU(),
+                                             nn.Dropout(0.3),
+                                             nn.Linear(d_model*2, 504))
 
         self._reset_parameters()
 
@@ -44,19 +63,60 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed):
+    def forward(self, src, mask, query_embed, pos_embed, gt_verb=None):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
-        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
-        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
         mask = mask.flatten(1)
+        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
+        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
+        device = src.device
 
+        enc_token_embed = self.enc_token_embed.weight.unsqueeze(1).repeat(1, bs, 1)
+        token_src = torch.cat([enc_token_embed, src], dim=0)
+        token_mask = torch.cat([torch.zeros((bs, 1), dtype=torch.bool, device=device), mask], dim=1)
+        token_pos_embed = torch.cat([torch.zeros((1, bs, c), dtype=torch.bool, device=device), pos_embed], dim=0)
         tgt = torch.zeros_like(query_embed)
-        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
+        token_memory = self.encoder(token_src, src_key_padding_mask=token_mask, pos=token_pos_embed)
+        token, memory = token_memory.split([1, h*w], dim=0)
+
         hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
-        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
+                           pos=pos_embed, query_pos=query_embed)
+
+        enc_token_embed2 = self.enc_token_embed2.weight.unsqueeze(1).repeat(1, bs, 1)
+        token_hs2 = torch.cat([enc_token_embed2, hs[-1]], dim=0)
+        # zero_mask = torch.zeros((bs, 1), dtype=torch.bool, device=device)
+        # hs1_mask = torch.cat([zero_mask, mask], dim=1)
+        token_memory2 = self.encoder2(token_hs2)
+        token2, memory2 = token_memory2.split([1, 100], dim=0)
+        # memory2 = self.encoder2(hs[-1], pos=query_embed)
+
+        vhs = token.view(bs, -1) + token2.view(bs, -1)
+        verb_pred = self.verb_classifier(vhs).view(bs, 504)
+
+        if self.vidx_ridx is None:
+            return hs.transpose(1, 2), None, memory.permute(1, 2, 0).view(bs, c, h, w), None
+        if gt_verb is not None:
+            selected_verb_query_embed = self.verb_query_embed.weight[gt_verb]
+            selected_roles = [self.vidx_ridx[v] for v in gt_verb]
+        else:
+            top1_verb = torch.topk(verb_pred, k=1, dim=1)[1].squeeze(1)
+            selected_verb_query_embed = self.verb_query_embed.weight[top1_verb]
+            selected_roles = [self.vidx_ridx[v] for v in top1_verb]
+        num_roles = [len(r) for r in selected_roles]
+        m = max(num_roles)
+
+        hs2 = []
+        for b in range(bs):
+            selected_role_query_embed = self.role_query_embed.weight[selected_roles[b]]
+            query_embed2 = selected_role_query_embed + selected_verb_query_embed[b:b+1]
+            tgt2 = torch.zeros_like(query_embed2)
+            hs2_ = self.decoder2(tgt2.unsqueeze(1), memory[:, b:b+1], memory_key_padding_mask=mask[b:b+1],
+                                    pos=pos_embed[:, b:b+1], query_pos=query_embed2.unsqueeze(1))
+            hs2.append(F.pad(hs2_, (0, 0, 0, 0, 0, m - num_roles[b]), mode='constant', value=0))
+        hs2 = torch.cat(hs2, dim=2)
+        
+        return hs.transpose(1, 2), verb_pred, num_roles, hs2.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w), memory2.permute(1, 2 ,0).view(bs, c, -1)
 
 
 class TransformerEncoder(nn.Module):
@@ -275,6 +335,7 @@ def _get_clones(module, N):
 
 def build_transformer(args):
     return Transformer(
+        vidx_ridx=None if not hasattr(args, "vidx_ridx") else args.vidx_ridx,
         d_model=args.hidden_dim,
         dropout=args.dropout,
         nhead=args.nheads,
@@ -282,7 +343,7 @@ def build_transformer(args):
         num_encoder_layers=args.enc_layers,
         num_decoder_layers=args.dec_layers,
         normalize_before=args.pre_norm,
-        return_intermediate_dec=True,
+        return_intermediate_dec=False,
     )
 
 
