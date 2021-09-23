@@ -18,8 +18,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, criterio
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
     model.train()
-    criterion.train()
-    criterion2.train()
+    if criterion is not None:
+        criterion.train()
+    if criterion2 is not None:
+        criterion2.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     # metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
@@ -30,11 +32,14 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, criterio
         samples = samples.to(device)
         targets = [{k: v.to(device) if type(v) is not str else v for k, v in t.items()} for t in targets]
 
-        outputs = model(samples, torch.stack([t['verbs'] for t in targets]))
-        # loss_dict = criterion(outputs, targets)
-        # weight_dict = criterion.weight_dict
-        loss_dict = criterion2(outputs, targets)
-        weight_dict = criterion2.weight_dict
+        if 'verbs' in targets[0]:
+            outputs = model(samples, torch.stack([t['verbs'] for t in targets]))
+        else:
+            outputs = model(samples)
+        weight_dict = criterion.weight_dict
+        assert weight_dict.items() == criterion2.weight_dict.items()
+        loss_dict = criterion(outputs, targets)
+        loss_dict.update(criterion2(outputs, targets))
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
         # reduce losses over all GPUs for logging purposes
@@ -169,18 +174,18 @@ def evaluate_swig(model, criterion, criterion2, data_loader, device, output_dir)
 
         # model output & calculate loss
         outputs = model(samples, torch.stack([t['verbs'] for t in targets]))
-        # loss_dict = criterion(outputs, targets)
-        # weight_dict = criterion.weight_dict
-        loss_dict2 = criterion2(outputs, targets, eval=True)
-        weight_dict2 = criterion2.weight_dict
+        weight_dict = criterion.weight_dict
+        assert weight_dict == criterion2.weight_dict
+        loss_dict = criterion(outputs, targets)
+        loss_dict.update(criterion2(outputs, targets, eval=True))
 
         # reduce losses over all GPUs for logging purposes
         # scaled with different loss coefficients
-        loss_dict_reduced = utils.reduce_dict(loss_dict2)
+        loss_dict_reduced = utils.reduce_dict(loss_dict)
         loss_dict_reduced_unscaled = {f'{k}_unscaled': v
                                     for k, v in loss_dict_reduced.items()}
-        loss_dict_reduced_scaled = {k: v * weight_dict2[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict2}
+        loss_dict_reduced_scaled = {k: v * weight_dict[k]
+                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
         losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
         loss_value = losses_reduced_scaled.item()
 

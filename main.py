@@ -82,8 +82,10 @@ def get_args_parser():
     parser.add_argument('--noun_loss_coef', default=1, type=float)
     parser.add_argument('--verb_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
+    parser.add_argument('--bbox_loss1_coef', default=5, type=float)
     parser.add_argument('--bbox_conf_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=5, type=float)
+    parser.add_argument('--giou_loss1_coef', default=5, type=float)
 
     # dataset parameters
     parser.add_argument('--dataset_file', default='swig')

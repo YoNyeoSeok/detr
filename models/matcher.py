@@ -61,11 +61,21 @@ class HungarianMatcher(nn.Module):
         # Also concat the target labels and boxes
         tgt_ids = torch.cat([v["labels"] for v in targets])
         tgt_bbox = torch.cat([v["boxes"] for v in targets])
+        # SWiG bounding box padding with -1
+        exist_bbox = tgt_bbox[:, 0] != -1
+        assert exist_bbox.sum() != 0
+        tgt_ids = tgt_ids[exist_bbox]
+        tgt_bbox = tgt_bbox[exist_bbox]
 
         # Compute the classification cost. Contrary to the loss, we don't use the NLL,
         # but approximate it in 1 - proba[target class].
         # The 1 is a constant that doesn't change the matching, it can be ommitted.
-        cost_class = -out_prob[:, tgt_ids]
+        if tgt_ids.dim() == 1:
+            cost_class = -out_prob[:, tgt_ids]
+        elif tgt_ids.dim() == 2:
+            cost_class = -out_prob[:, tgt_ids.long()].mean(-1)
+        else:
+            assert False
 
         # Compute the L1 cost between boxes
         cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
@@ -77,7 +87,8 @@ class HungarianMatcher(nn.Module):
         C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
         C = C.view(bs, num_queries, -1).cpu()
 
-        sizes = [len(v["boxes"]) for v in targets]
+        # SWiG bounding box padding with -1
+        sizes = [sum(v["boxes"][:, 0]!=-1).cpu().item() for v in targets]
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 

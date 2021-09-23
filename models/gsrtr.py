@@ -42,22 +42,33 @@ class GSRTR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-        # classifiers & predictors (for grounded noun prediction)
-        self.noun_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
-                                             nn.ReLU(),
-                                             nn.Dropout(0.3),
-                                             nn.Linear(hidden_dim*2, 9948))
-        self.bbox_predictor = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+        self.noun_classifier1 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+                                              nn.ReLU(),
+                                              nn.Dropout(0.3),
+                                              nn.Linear(hidden_dim*2, 9927+1))
+        self.bbox_predictor1 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
                                              nn.ReLU(),
                                              nn.Dropout(0.2),
                                              nn.Linear(hidden_dim*2, hidden_dim*2),
                                              nn.ReLU(),
                                              nn.Dropout(0.2),
                                              nn.Linear(hidden_dim*2, 4))
-        self.bbox_conf_predictor = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+        # classifiers & predictors (for grounded noun prediction)
+        self.noun_classifier = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
                                              nn.ReLU(),
-                                             nn.Dropout(0.2),
-                                             nn.Linear(hidden_dim*2, 1))
+                                             nn.Dropout(0.3),
+                                             nn.Linear(hidden_dim*2, 9927+1))
+        self.bbox_predictor = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+                                            nn.ReLU(),
+                                            nn.Dropout(0.2),
+                                            nn.Linear(hidden_dim*2, hidden_dim*2),
+                                            nn.ReLU(),
+                                            nn.Dropout(0.2),
+                                            nn.Linear(hidden_dim*2, 4))
+        self.bbox_conf_predictor = nn.Sequential(nn.Linear(hidden_dim, hidden_dim*2),
+                                                 nn.ReLU(), 
+                                                 nn.Dropout(0.2),
+                                                 nn.Linear(hidden_dim*2, 1))
 
     def forward(self, samples: NestedTensor, gt_verb=None):
         """ The forward expects a NestedTensor, which consists of:
@@ -85,10 +96,8 @@ class GSRTR(nn.Module):
 
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
-        
+        noun_pred1 = self.noun_classifier1(hs)
+        bbox_pred1 = self.bbox_predictor1(hs).sigmoid()
         noun_pred = self.noun_classifier(hs2)
         # noun_pred = F.pad(noun_pred, (0, 0, 0, MAX_NUM_ROLES - num_roles), mode='constant', value=0)[-1].view(1, MAX_NUM_ROLES, self.num_noun_classes)
         bbox_pred = self.bbox_predictor(hs2).sigmoid()
@@ -96,6 +105,10 @@ class GSRTR(nn.Module):
         bbox_conf_pred = self.bbox_conf_predictor(hs2)
         # bbox_conf_pred = F.pad(bbox_conf_pred, (0, 0, 0, MAX_NUM_ROLES - num_roles), mode='constant', value=0)[-1].view(1, MAX_NUM_ROLES, 1)
 
+        out = {'pred_logits': outputs_class[-1].sum()*0 + noun_pred1[-1],
+               'pred_boxes': outputs_coord[-1].sum()*0 + bbox_pred1[-1]}
+        if self.aux_loss:
+            out['aux_outputs'] = self._set_aux_loss(outputs_class.sum()*0 + noun_pred1, outputs_coord.sum()*0 + bbox_pred1)
         out['pred_verb'] = verb_pred
         out["num_roles"] = num_roles
         out['pred_noun'] = noun_pred[-1]
@@ -146,16 +159,34 @@ class SetCriterion(nn.Module):
 
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
-        target_classes = torch.full(src_logits.shape[:2], self.num_classes,
-                                    dtype=torch.int64, device=src_logits.device)
-        target_classes[idx] = target_classes_o
+        if target_classes_o.dim() == 1:
+            target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+                                        dtype=torch.int64, device=src_logits.device)
+        elif target_classes_o.dim() == 2:
+            target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+                                        dtype=torch.int64, device=src_logits.device).unsqueeze(2).repeat(1, 1, 3)
+        else:
+            assert False
+        target_classes[idx] = target_classes_o.long()
 
-        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        if target_classes_o.dim() == 1:
+            loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        elif target_classes_o.dim() == 2:
+            loss_ce = torch.stack([
+                F.cross_entropy(src_logits.transpose(1, 2), t.squeeze(-1), self.empty_weight)
+                for t in target_classes.split(1, dim=-1)]).mean()
+        else:
+            assert False
         losses = {'loss_ce': loss_ce}
 
-        if log:
-            # TODO this should probably be a separate loss, not hacked in this one here
-            losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
+        # if log:
+        #     # TODO this should probably be a separate loss, not hacked in this one here
+        #     if target_classes_o.dim() == 1:
+        #         losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
+        #     elif target_classes_o.dim() == 2:
+        #         losses['class_error'] = 100 - accuracy_swig(src_logits[idx], target_classes_o)[1]
+        #     else:
+        #         assert False
         return losses
 
     @torch.no_grad()
@@ -181,16 +212,22 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs['pred_boxes'][idx]
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        # SWiG bounding box padding with -1
+        exist_boxes = target_boxes[:, 0] != -1
+        assert exist_boxes.sum() != 0
+        
+        src_boxes = src_boxes[exist_boxes]
+        target_boxes = target_boxes[exist_boxes]
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
 
         losses = {}
-        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+        losses['loss_bbox1'] = loss_bbox.sum() / num_boxes
 
         loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
             box_ops.box_cxcywh_to_xyxy(src_boxes),
             box_ops.box_cxcywh_to_xyxy(target_boxes)))
-        losses['loss_giou'] = loss_giou.sum() / num_boxes
+        losses['loss_giou1'] = loss_giou.sum() / num_boxes
         return losses
 
     def loss_masks(self, outputs, targets, indices, num_boxes):
@@ -257,7 +294,8 @@ class SetCriterion(nn.Module):
         indices = self.matcher(outputs_without_aux, targets)
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
+        # SWiG bounding padding with -1
+        num_boxes = sum([sum(v["boxes"][:, 0]!=-1).cpu().item() for v in targets])
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
@@ -514,8 +552,6 @@ class SWiGCriterion(nn.Module):
         out['loss_bbox'] = bbox_loss
         out['loss_giou'] = giou_loss
         out['loss_bbox_conf'] = bbox_conf_loss
-        out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
-        out['loss_unused'] = out_logits.sum()*0 + out_bbox.sum()*0
 
         # Note that all metrics should be calculated per verb and averaged across verbs.
         ## In the dev and test split of SWiG dataset, there are 50 images for each verb (same number of images per verb).
@@ -578,10 +614,10 @@ def build(args):
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
     matcher = build_matcher(args)
-    # weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef, 'loss_giou': args.giou_loss_coef}
-    weight_dict = {'loss_nce': args.noun_loss_coef, 'loss_vce': args.verb_loss_coef, 
-                    'loss_bbox':args.bbox_loss_coef, 'loss_giou':args.giou_loss_coef,
-                    'loss_bbox_conf':args.bbox_conf_loss_coef, 'loss_unused': 0}
+    weight_dict = {'loss_ce': 1, 'loss_bbox1': args.bbox_loss1_coef, 'loss_giou1': args.giou_loss1_coef,
+                   'loss_nce': args.noun_loss_coef, 'loss_vce': args.verb_loss_coef, 
+                   'loss_bbox':args.bbox_loss_coef, 'loss_giou':args.giou_loss_coef,
+                   'loss_bbox_conf':args.bbox_conf_loss_coef}
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
         weight_dict["loss_dice"] = args.dice_loss_coef
@@ -595,7 +631,7 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
     if args.masks:
         losses += ["masks"]
-    criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
+    criterion = SetCriterion(9927, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
     criterion.to(device)
 
